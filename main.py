@@ -13,17 +13,16 @@ def pale_open(name):
 	cursor = con.cursor()
 	return con, cursor
 
-
-
 while True:
 	inp = input("PaleSQL: ").strip()
 
 	command, _, argument = inp.partition(" ")
 	argument = argument.strip()
+	command = command.lower()
 
-	if command.lower() == ".open":
+	if command == ".open":
 		if argument == "":
-			print("No name of dnfratabase")
+			print("No name of database")
 			continue
 		if con is not None:
 			con.close()
@@ -40,6 +39,14 @@ while True:
 		print("No database opened")
 		continue
 
+	if command == ".close":
+		con.close()
+		con = None
+		cursor = None
+		sql = ""
+		print("Database closed")
+		continue
+
 	sql += inp + '\n'
 
 	if sqlite3.complete_statement(sql):
@@ -52,6 +59,6 @@ while True:
 		except sqlite3.Error as error:
 			print("SQL error:", error)
 			sql=""
-			
+
 if con is not None:
 	con.close()
