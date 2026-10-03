@@ -1,7 +1,12 @@
+import sys
 import sqlite3
 
-print ("""\nhaiiiiiiiiii :3 rawr certified SQL CLI :p 
-PaleSQL 0.1.0 by Shikaru Software
+PALESQL_VERSION = "0.1.0"
+PYTHON_VERSION = sys.version.split()[0]
+SQLITE_LIBRARY_VERSION = sqlite3.sqlite_version
+
+print (f"""\nhaiiiiiiiiii :3 rawr certified SQL CLI :p 
+PaleSQL {PALESQL_VERSION} by Shikaru Software
 Type .help for commands.\n""")
 
 sql = ""
@@ -24,7 +29,15 @@ def pale_help():
 		'.close - close database \n'
 		'.exit or .quit - exit PaleSQL\n'
 		'.clear - clear SQL buffer\n'
+		'.version - show version of PaleSQL, Python, SQLite\n'
+
 		)
+def pale_version():
+	print(
+		f"PaleSQL version {PALESQL_VERSION}\n"
+		f"Python version {PYTHON_VERSION}\n"
+		f"SQLite library version {SQLITE_LIBRARY_VERSION}\n"
+	)
 
 while True:
 	inp = input("PaleSQL: ").strip()
@@ -35,6 +48,10 @@ while True:
 
 	if command == ".help":
 		pale_help()
+		continue
+
+	if command == ".version":
+		pale_version()
 		continue
 
 	if command == ".open":
