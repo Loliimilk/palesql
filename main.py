@@ -1,5 +1,9 @@
 import sqlite3
 
+print ("""\nhaiiiiiiiiii :3 rawr certified SQL CLI :p 
+PaleSQL 0.1.0 by Shikaru Software
+Type .help for commands.\n""")
+
 sql = ""
 
 con = None
@@ -13,12 +17,24 @@ def pale_open(name):
 	cursor = con.cursor()
 	return con, cursor
 
+def pale_help():
+	print(
+		'.help - show commands\n'
+		'.open - open database \n'
+		'.close - close database \n'
+		'.exit - exit PaleSQL\n'
+		)
+
 while True:
 	inp = input("PaleSQL: ").strip()
 
 	command, _, argument = inp.partition(" ")
 	argument = argument.strip()
 	command = command.lower()
+
+	if command == ".help":
+		pale_help()
+		continue
 
 	if command == ".open":
 		if argument == "":
