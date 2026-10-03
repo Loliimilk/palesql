@@ -22,7 +22,8 @@ def pale_help():
 		'.help - show commands\n'
 		'.open - open database \n'
 		'.close - close database \n'
-		'.exit - exit PaleSQL\n'
+		'.exit or .quit - exit PaleSQL\n'
+		'.clear - clear SQL buffer\n'
 		)
 
 while True:
@@ -48,7 +49,12 @@ while True:
 		sql = ""
 		continue
 
-	if inp.lower() in (".exit", "exit", "quit"):
+	if command == ".clear":
+		print("Buffer is cleaned")
+		sql = ""
+		continue
+
+	if inp.lower() in (".exit", "exit", "quit", ".quit"):
 		break
 
 	if con is None:
