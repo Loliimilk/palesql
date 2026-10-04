@@ -25,12 +25,13 @@ def pale_open(name):
 def pale_help():
 	print(
 		'.help - show commands\n'
-		'.open - open database \n'
-		'.close - close database \n'
-		'.exit or .quit - exit PaleSQL\n'
+		'.open <database> - open or create database\n'
+		'.close - close current database\n'
+		'.database - show current main database\n'
+		'.databases - show all attached databases\n'
 		'.clear - clear SQL buffer\n'
-		'.version - show version of PaleSQL, Python, SQLite\n'
-
+		'.version - show PaleSQL, Python and SQLite versions\n'
+		'.exit or .quit - exit PaleSQL\n'
 		)
 def pale_version():
 	print(
@@ -39,10 +40,24 @@ def pale_version():
 		f"SQLite library version {SQLITE_LIBRARY_VERSION}\n"
 	)
 
+def pale_database():
+	cursor.execute('''PRAGMA database_list;''')
+	print (f"{'seq':<5} | {'name':<5} | file")
+	row = next((row for row in cursor.fetchall() if row[1] == "main"), None)
+	print(f"{row[0]:<5} | {row[1]:<5} | {row[2]}")
+
+def pale_databases():
+	cursor.execute('''PRAGMA database_list;''')
+	print (f"{'seq':<5} | {'name':<5} | file")
+	for row in cursor.fetchall():
+		print(f"{row[0]:<5} | {row[1]:<5} | {row[2]}")
+
+
+
 while True:
 	inp = input("PaleSQL: ").strip()
 
-	command, _, argument = inp.partition(" ")
+	command, _, argument = inp.partition(" ")  
 	argument = argument.strip()
 	command = command.lower()
 
@@ -76,6 +91,14 @@ while True:
 
 	if con is None:
 		print("No database opened")
+		continue
+
+	if command == ".database":
+		pale_database()
+		continue
+
+	if command == ".databases":
+		pale_databases()
 		continue
 
 	if command == ".close":
