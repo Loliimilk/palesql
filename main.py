@@ -24,6 +24,7 @@ def pale_help():
 		".close - close current database\n"
 		".database - show current main database\n"
 		".databases - show all attached databases\n"
+		".tables [pattern] - show tables, optionally filtered by pattern\n"
 		".clear - clear SQL buffer\n"
 		".version - show PaleSQL, Python and SQLite versions\n"
 		".exit or .quit - exit PaleSQL\n"
@@ -64,6 +65,9 @@ def pale_database(cursor):
 def pale_databases(cursor):
 	print_databases(get_databases(cursor))
 
+def pale_tables(cursor, pattern):
+	cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?", (pattern,))
+	return cursor.fetchall()
 
 def execute_sql(cursor, sql):
 	try:
@@ -137,6 +141,18 @@ def main():
 
 			if con is None:
 				print("No database opened")
+				continue
+
+			# DB is opened
+
+			if command == ".tables":
+				tables = pale_tables(cursor, argument or "%")
+
+				if tables:
+					for table in tables:
+						print(table[0])
+				else:
+					print("No tables found")
 				continue
 
 			if command == ".close":
