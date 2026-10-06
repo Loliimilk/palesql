@@ -79,6 +79,16 @@ def execute_sql(cursor, sql):
 	except sqlite3.Error as error:
 		print("SQL error:", error)
 
+def pale_schema(cursor, table_name):
+	cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+	row = cursor.fetchone()
+
+	if row is None:
+		print(f"Table '{table_name}' not found")
+		return
+
+	print(row[0])
+
 
 def main():
 	print(
@@ -153,6 +163,14 @@ def main():
 						print(table[0])
 				else:
 					print("No tables found")
+				continue
+
+			if command == ".schema":
+				if not argument:
+					print("No table name provided")
+					continue
+
+				pale_schema(cursor, argument)
 				continue
 
 			if command == ".close":
