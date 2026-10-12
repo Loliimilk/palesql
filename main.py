@@ -31,6 +31,7 @@ def pale_help():
 		".columns <table> - show table columns\n"
 		".indexes [table] - show indexes, optionally filtered by table\n"
 		".foreignkeys <table> - show table foreign keys\n"
+		".schema [table] - show schema, optionally filtered by object name\n"
 		".fullschema - show full schema and statistics\n"
 		".clear - clear SQL buffer\n"
 		".version - show PaleSQL, Python and SQLite versions\n"
@@ -128,15 +129,27 @@ def execute_sql(cursor, sql):
 	except sqlite3.Error as error:
 		print("SQL error:", error)
 
-def pale_schema(cursor, table_name):
-	cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
-	row = cursor.fetchone()
+def pale_schema(cursor, table_name=""):
+	sql = "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*'"
+	parameters = ()
 
-	if row is None:
-		print(f"Table '{table_name}' not found")
+	if table_name:
+		sql += " AND (name=? COLLATE NOCASE OR tbl_name=? COLLATE NOCASE)"
+		parameters = (table_name, table_name)
+
+	sql += " ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'view' THEN 2 ELSE 3 END, name"
+	cursor.execute(sql, parameters)
+	rows = cursor.fetchall()
+
+	if not rows:
+		if table_name:
+			print(f"Object '{table_name}' not found")
+		else:
+			print("-- No schema found")
 		return
 
-	print(row[0])
+	for sql, in rows:
+		print(sql.rstrip().rstrip(";") + ";")
 
 
 def pale_fullschema(cursor):
@@ -311,10 +324,6 @@ def main():
 				continue
 
 			if command == ".schema":
-				if not argument:
-					print("No table name provided")
-					continue
-
 				pale_schema(cursor, argument)
 				continue
 
