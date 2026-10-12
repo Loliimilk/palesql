@@ -25,6 +25,7 @@ def pale_help():
 		".database - show current main database\n"
 		".databases - show all attached databases\n"
 		".tables [pattern] - show tables, optionally filtered by pattern\n"
+		".views - show views\n"
 		".columns <table> - show table columns\n"
 		".indexes [table] - show indexes, optionally filtered by table\n"
 		".foreignkeys <table> - show table foreign keys\n"
@@ -70,6 +71,10 @@ def pale_databases(cursor):
 
 def pale_tables(cursor, pattern):
 	cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?", (pattern,))
+	return cursor.fetchall()
+
+def pale_views(cursor):
+	cursor.execute("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name")
 	return cursor.fetchall()
 
 def pale_indexes(cursor, table_name):
@@ -206,6 +211,16 @@ def main():
 						print(table[0])
 				else:
 					print("No tables found")
+				continue
+
+			if command == ".views":
+				views = pale_views(cursor)
+
+				if views:
+					for view in views:
+						print(view[0])
+				else:
+					print("No views found")
 				continue
 
 			if command == ".indexes":
