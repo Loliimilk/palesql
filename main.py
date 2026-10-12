@@ -30,6 +30,7 @@ def pale_help():
 		".columns <table> - show table columns\n"
 		".indexes [table] - show indexes, optionally filtered by table\n"
 		".foreignkeys <table> - show table foreign keys\n"
+		".fullschema - show full schema and statistics\n"
 		".clear - clear SQL buffer\n"
 		".version - show PaleSQL, Python and SQLite versions\n"
 		".exit or .quit - exit PaleSQL\n"
@@ -109,6 +110,40 @@ def pale_schema(cursor, table_name):
 		return
 
 	print(row[0])
+
+
+def pale_fullschema(cursor):
+	cursor.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'view' THEN 2 ELSE 3 END, name")
+	rows = cursor.fetchall()
+
+	if not rows:
+		print("-- No schema found")
+
+	for sql, in rows:
+		print(sql.rstrip().rstrip(";") + ";")
+
+	cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'sqlite_stat*' ORDER BY name")
+	tables = cursor.fetchall()
+
+	if not tables:
+		print("-- No statistics found")
+		return
+
+	print("ANALYZE sqlite_schema;")
+
+	for table_name, in tables:
+		quoted_name = '"' + table_name.replace('"', '""') + '"'
+		print(f"DELETE FROM {quoted_name};")
+		cursor.execute(f"SELECT * FROM {quoted_name}")
+		rows = cursor.fetchall()
+
+		for row in rows:
+			placeholders = ", ".join("quote(?)" for value in row)
+			cursor.execute(f"SELECT {placeholders}", row)
+			values = ", ".join(cursor.fetchone())
+			print(f"INSERT INTO {quoted_name} VALUES ({values});")
+
+	print("ANALYZE sqlite_schema;")
 
 
 def pale_columns(cursor, table_name):
@@ -254,6 +289,10 @@ def main():
 					continue
 
 				pale_schema(cursor, argument)
+				continue
+
+			if command == ".fullschema":
+				pale_fullschema(cursor)
 				continue
 
 			if command == ".columns":
