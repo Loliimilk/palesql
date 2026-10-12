@@ -26,6 +26,7 @@ def pale_help():
 		".databases - show all attached databases\n"
 		".tables [pattern] - show tables, optionally filtered by pattern\n"
 		".views - show views\n"
+		".triggers - show triggers\n"
 		".columns <table> - show table columns\n"
 		".indexes [table] - show indexes, optionally filtered by table\n"
 		".foreignkeys <table> - show table foreign keys\n"
@@ -75,6 +76,10 @@ def pale_tables(cursor, pattern):
 
 def pale_views(cursor):
 	cursor.execute("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name")
+	return cursor.fetchall()
+
+def pale_triggers(cursor):
+	cursor.execute("SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name")
 	return cursor.fetchall()
 
 def pale_indexes(cursor, table_name):
@@ -221,6 +226,16 @@ def main():
 						print(view[0])
 				else:
 					print("No views found")
+				continue
+
+			if command == ".triggers":
+				triggers = pale_triggers(cursor)
+
+				if triggers:
+					for trigger in triggers:
+						print(trigger[0])
+				else:
+					print("No triggers found")
 				continue
 
 			if command == ".indexes":
