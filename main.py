@@ -33,6 +33,7 @@ def pale_help():
 		".foreignkeys <table> - show table foreign keys\n"
 		".schema [table] - show schema, optionally filtered by object name\n"
 		".fullschema - show full schema and statistics\n"
+		".lint - check foreign keys and suggest indexes\n"
 		".clear - clear SQL buffer\n"
 		".version - show PaleSQL, Python and SQLite versions\n"
 		".exit or .quit - exit PaleSQL\n"
@@ -150,6 +151,69 @@ def pale_schema(cursor, table_name=""):
 
 	for sql, in rows:
 		print(sql.rstrip().rstrip(";") + ";")
+
+
+def pale_lint(cursor):
+	cursor.execute("SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*' ORDER BY name")
+	tables = [row[0] for row in cursor.fetchall()]
+	issues = 0
+	has_foreign_keys = False
+
+	for table in tables:
+		quoted_table = table.replace("'", "''")
+		cursor.execute(f"PRAGMA main.foreign_key_list('{quoted_table}');")
+		foreign_keys = cursor.fetchall()
+
+		if not foreign_keys:
+			continue
+
+		has_foreign_keys = True
+		try:
+			cursor.execute(f"PRAGMA main.foreign_key_check('{quoted_table}');")
+			for child, rowid, parent, key_id in cursor.fetchall():
+				print(f"Foreign key violation: {child}, rowid {rowid}, key {key_id}, parent {parent}")
+				issues += 1
+		except sqlite3.Error as error:
+			print(f"Foreign key error in '{table}': {error}")
+			issues += 1
+
+		cursor.execute(f"PRAGMA main.index_list('{quoted_table}');")
+		indexes = cursor.fetchall()
+		indexed_columns = []
+
+		for seq, name, unique, origin, partial in indexes:
+			if partial:
+				continue
+			quoted_index = name.replace("'", "''")
+			cursor.execute(f"PRAGMA main.index_info('{quoted_index}');")
+			indexed_columns.append([row[2].lower() if row[2] else None for row in cursor.fetchall()])
+
+		cursor.execute(f"PRAGMA main.table_info('{quoted_table}');")
+		columns = cursor.fetchall()
+		primary_key = [row[1].lower() for row in sorted(columns, key=lambda row: row[5]) if row[5]]
+		indexed_columns.append(primary_key)
+		keys = {}
+
+		for key_id, seq, parent, child_column, parent_column, on_update, on_delete, match in foreign_keys:
+			keys.setdefault(key_id, []).append((seq, child_column))
+			if seq == 0 and parent.lower() not in [name.lower() for name in tables]:
+				print(f"Missing parent table: '{table}', key {key_id}, parent '{parent}'")
+				issues += 1
+
+		for key_id, columns in keys.items():
+			names = [name for seq, name in sorted(columns)]
+			wanted = {name.lower() for name in names}
+			if not any(set(index[:len(names)]) == wanted for index in indexed_columns):
+				print(f"Consider an index: '{table}' ({', '.join(names)}), foreign key {key_id}; no full index with these leading columns")
+				issues += 1
+
+	cursor.execute("PRAGMA foreign_keys;")
+	if has_foreign_keys and not cursor.fetchone()[0]:
+		print("Foreign key enforcement is disabled")
+		issues += 1
+
+	if not issues:
+		print("No foreign key or index issues found")
 
 
 def pale_fullschema(cursor):
@@ -329,6 +393,10 @@ def main():
 
 			if command == ".fullschema":
 				pale_fullschema(cursor)
+				continue
+
+			if command == ".lint":
+				pale_lint(cursor)
 				continue
 
 			if command == ".columns":
