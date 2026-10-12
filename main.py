@@ -1,5 +1,7 @@
 import sys
 import sqlite3
+import os
+import re
 
 
 PALESQL_VERSION = "0.2.0"
@@ -31,12 +33,13 @@ def pale_help():
 		".columns <table> - show table columns\n"
 		".indexes [table] - show indexes, optionally filtered by table\n"
 		".foreignkeys <table> - show table foreign keys\n"
-		".schema [table] - show schema, optionally filtered by object name\n"
+		".schema [pattern] - show schema, optionally filtered by name/pattern\n"
 		".fullschema - show full schema and statistics\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".clear - clear SQL buffer\n"
 		".version - show PaleSQL, Python and SQLite versions\n"
 		".exit or .quit - exit PaleSQL\n"
+		"Use database.table to select an object in an attached database.\n"
 	)
 
 
@@ -74,9 +77,47 @@ def pale_database(cursor):
 def pale_databases(cursor):
 	print_databases(get_databases(cursor))
 
+def quote_name(name):
+	return '"' + name.replace('"', '""') + '"'
+
+def identifier_key(name):
+	# SQLite folds ASCII letters only when comparing identifiers.
+	return name.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
+
+def database_objects(cursor, object_type=None):
+	objects = []
+	for seq, database, file in get_databases(cursor):
+		cursor.execute(f"SELECT type, name, tbl_name, sql FROM {quote_name(database)}.sqlite_master ORDER BY name")
+		for kind, name, table, sql in cursor.fetchall():
+			if object_type is None or kind == object_type:
+				objects.append((database, kind, name, table, sql))
+	return objects
+
+def object_label(database, name):
+	return name if database == "main" else f"{database}.{name}"
+
+def find_table(cursor, table_name):
+	objects = database_objects(cursor)
+	objects.sort(key=lambda row: 0 if row[0] == "temp" else 1)
+	for database, kind, name, table, sql in objects:
+		if kind in ("table", "view") and identifier_key(f"{database}.{name}") == identifier_key(table_name):
+			return database, name
+	for database, kind, name, table, sql in objects:
+		if kind in ("table", "view") and identifier_key(name) == identifier_key(table_name):
+			return database, name
+	return None
+
+def table_pragma(cursor, database, pragma, name):
+	cursor.execute(f"PRAGMA {quote_name(database)}.{pragma}({quote_name(name)});")
+	return cursor.fetchall()
+
+def shadow_tables(cursor):
+	cursor.execute("PRAGMA table_list;")
+	return {(row[0], row[1]) for row in cursor.fetchall() if row[2] == "shadow"}
+
 def pale_dbinfo(cursor, database_name):
 	rows = get_databases(cursor)
-	database = next((row for row in rows if row[1].lower() == database_name.lower()), None)
+	database = next((row for row in rows if identifier_key(row[1]) == identifier_key(database_name)), None)
 
 	if database is None:
 		print(f"Database '{database_name}' not found")
@@ -97,28 +138,48 @@ def pale_dbinfo(cursor, database_name):
 		label = pragma.replace("_", " ")
 		print(f"{label:<20} | {value}")
 
-	print(f"{'size (bytes)':<20} | {info['page_size'] * info['page_count']}")
+	print(f"{'logical size (bytes)':<20} | {info['page_size'] * info['page_count']}")
 	print(f"{'free space (bytes)':<20} | {info['page_size'] * info['freelist_count']}")
+	if file:
+		total = 0
+		for label, suffix in (("file bytes", ""), ("WAL bytes", "-wal"), ("SHM bytes", "-shm"), ("journal bytes", "-journal")):
+			try:
+				size = os.path.getsize(file + suffix)
+			except FileNotFoundError:
+				size = 0
+			except OSError as error:
+				print(f"{label:<20} | unavailable: {error}")
+				total = None
+				continue
+			print(f"{label:<20} | {size}")
+			if total is not None:
+				total += size
+		if total is not None:
+			print(f"{'total file bytes':<20} | {total}")
 
 def pale_tables(cursor, pattern):
-	cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?", (pattern,))
-	return cursor.fetchall()
+	rows = []
+	shadows = shadow_tables(cursor)
+	for database, kind, name, table, sql in database_objects(cursor, "table"):
+		if name.startswith("sqlite_") or (database, name) in shadows:
+			continue
+		cursor.execute("SELECT ? LIKE ? OR ? LIKE ?", (name, pattern, f"{database}.{name}", pattern))
+		if cursor.fetchone()[0]:
+			rows.append((object_label(database, name),))
+	return rows
 
 def pale_views(cursor):
-	cursor.execute("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name")
-	return cursor.fetchall()
+	return [(object_label(database, name),) for database, kind, name, table, sql in database_objects(cursor, "view")]
 
 def pale_triggers(cursor):
-	cursor.execute("SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name")
-	return cursor.fetchall()
+	return [(object_label(database, name),) for database, kind, name, table, sql in database_objects(cursor, "trigger")]
 
 def pale_indexes(cursor, table_name):
-	if table_name:
-		cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? COLLATE NOCASE ORDER BY name", (table_name,))
-	else:
-		cursor.execute("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
-
-	return cursor.fetchall()
+	rows = []
+	for database, kind, name, table, sql in database_objects(cursor, "index"):
+		if not table_name or identifier_key(table) == identifier_key(table_name) or identifier_key(f"{database}.{table}") == identifier_key(table_name):
+			rows.append((object_label(database, name),))
+	return rows
 
 def execute_sql(cursor, sql):
 	try:
@@ -130,146 +191,153 @@ def execute_sql(cursor, sql):
 	except sqlite3.Error as error:
 		print("SQL error:", error)
 
-def pale_schema(cursor, table_name=""):
-	sql = "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*'"
-	parameters = ()
+def schema_rows(cursor, pattern="%"):
+	rows = []
+	shadows = shadow_tables(cursor)
+	for database, kind, name, table, sql in database_objects(cursor):
+		if sql is None or name.startswith("sqlite_") or (database, name) in shadows:
+			continue
+		cursor.execute("SELECT ? LIKE ? OR ? LIKE ? OR ? LIKE ? OR ? LIKE ?", (name, pattern, table, pattern, f"{database}.{name}", pattern, f"{database}.{table}", pattern))
+		if cursor.fetchone()[0]:
+			rows.append((database, kind, name, sql))
+	order = {"table": 0, "index": 1, "view": 2, "trigger": 3}
+	return sorted(rows, key=lambda row: (order[row[1]], row[0], row[2]))
 
-	if table_name:
-		sql += " AND (name=? COLLATE NOCASE OR tbl_name=? COLLATE NOCASE)"
-		parameters = (table_name, table_name)
 
-	sql += " ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'view' THEN 2 ELSE 3 END, name"
-	cursor.execute(sql, parameters)
-	rows = cursor.fetchall()
+def schema_sql(database, kind, name, sql):
+	# Qualify the declared object, leaving its body and string literals intact.
+	space = r"(?:\s|/\*[\s\S]*?\*/|--[^\n]*(?:\n|$))+"
+	prefix = rf"\A\s*CREATE{space}(?:TEMP(?:ORARY)?{space})?(?:(?P<modifier>VIRTUAL|UNIQUE){space})?(?:TABLE|INDEX|VIEW|TRIGGER){space}(?:IF{space}NOT{space}EXISTS{space})?"
+	identifier = r'''(?:"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|'(?:''|[^'])*'|(?:(?!/\*|--)[^\s(;])+)'''
+	match = re.match(prefix + identifier, sql, re.IGNORECASE)
+	if match is None:
+		raise ValueError(f"Cannot read schema for {database}.{name}")
+	modifier = match.group("modifier")
+	start = "CREATE " + (modifier.upper() + " " if modifier else "") + kind.upper() + " "
+	return start + quote_name(database) + "." + quote_name(name) + sql[match.end():].rstrip().rstrip(";") + ";"
 
+
+def pale_schema(cursor, pattern=""):
+	rows = schema_rows(cursor, pattern or "%")
 	if not rows:
-		if table_name:
-			print(f"Object '{table_name}' not found")
-		else:
-			print("-- No schema found")
-		return
-
-	for sql, in rows:
-		print(sql.rstrip().rstrip(";") + ";")
+		print(f"-- No schema found for '{pattern}'" if pattern else "-- No schema found")
+	for database, kind, name, sql in rows:
+		print(schema_sql(database, kind, name, sql))
 
 
 def pale_lint(cursor):
-	cursor.execute("SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*' ORDER BY name")
-	tables = [row[0] for row in cursor.fetchall()]
+	objects = database_objects(cursor, "table")
+	tables = {(identifier_key(database), identifier_key(name)) for database, kind, name, table, sql in objects}
 	issues = 0
 	has_foreign_keys = False
 
-	for table in tables:
-		quoted_table = table.replace("'", "''")
-		cursor.execute(f"PRAGMA main.foreign_key_list('{quoted_table}');")
-		foreign_keys = cursor.fetchall()
-
+	for database, kind, table, unused, sql in objects:
+		foreign_keys = table_pragma(cursor, database, "foreign_key_list", table)
 		if not foreign_keys:
 			continue
-
 		has_foreign_keys = True
+		label = object_label(database, table)
 		try:
-			cursor.execute(f"PRAGMA main.foreign_key_check('{quoted_table}');")
-			for child, rowid, parent, key_id in cursor.fetchall():
-				print(f"Foreign key violation: {child}, rowid {rowid}, key {key_id}, parent {parent}")
+			violations = table_pragma(cursor, database, "foreign_key_check", table)
+			for child, rowid, parent, key_id in violations:
+				print(f"Foreign key violation: {label}, rowid {rowid}, key {key_id}, parent {parent}")
 				issues += 1
 		except sqlite3.Error as error:
-			print(f"Foreign key error in '{table}': {error}")
+			print(f"Foreign key error in '{label}': {error}")
 			issues += 1
+			continue
 
-		cursor.execute(f"PRAGMA main.index_list('{quoted_table}');")
-		indexes = cursor.fetchall()
-		indexed_columns = []
-
-		for seq, name, unique, origin, partial in indexes:
-			if partial:
-				continue
-			quoted_index = name.replace("'", "''")
-			cursor.execute(f"PRAGMA main.index_info('{quoted_index}');")
-			indexed_columns.append([row[2].lower() if row[2] else None for row in cursor.fetchall()])
-
-		cursor.execute(f"PRAGMA main.table_info('{quoted_table}');")
-		columns = cursor.fetchall()
-		primary_key = [row[1].lower() for row in sorted(columns, key=lambda row: row[5]) if row[5]]
-		indexed_columns.append(primary_key)
 		keys = {}
-
-		for key_id, seq, parent, child_column, parent_column, on_update, on_delete, match in foreign_keys:
-			keys.setdefault(key_id, []).append((seq, child_column))
-			if seq == 0 and parent.lower() not in [name.lower() for name in tables]:
-				print(f"Missing parent table: '{table}', key {key_id}, parent '{parent}'")
+		for row in foreign_keys:
+			keys.setdefault(row[0], []).append(row)
+		for key_id, rows in keys.items():
+			rows.sort(key=lambda row: row[1])
+			parent = rows[0][2]
+			if (identifier_key(database), identifier_key(parent)) not in tables:
+				print(f"Missing parent table: '{label}', key {key_id}, parent '{parent}'")
 				issues += 1
-
-		for key_id, columns in keys.items():
-			names = [name for seq, name in sorted(columns)]
-			wanted = {name.lower() for name in names}
-			if not any(set(index[:len(names)]) == wanted for index in indexed_columns):
-				print(f"Consider an index: '{table}' ({', '.join(names)}), foreign key {key_id}; no full index with these leading columns")
+				continue
+			columns = table_pragma(cursor, database, "table_xinfo", parent)
+			primary_key = [row[1] for row in sorted(columns, key=lambda row: row[5]) if row[5]]
+			parent_columns = [row[4] for row in rows]
+			if all(name is None for name in parent_columns):
+				parent_columns = primary_key
+			conditions = []
+			for row, parent_column in zip(rows, parent_columns):
+				conditions.append(f"p.{quote_name(parent_column)} = c.{quote_name(row[3])}")
+				conditions.append(f"p.{quote_name(parent_column)} = ?")
+			query = f"SELECT 1 FROM {quote_name(database)}.{quote_name(parent)} AS p CROSS JOIN {quote_name(database)}.{quote_name(table)} AS c WHERE " + " AND ".join(conditions)
+			try:
+				cursor.execute("EXPLAIN QUERY PLAN " + query, (None,) * len(rows))
+				plan = cursor.fetchall()
+				if not any(row[3].startswith("SEARCH c ") and "AUTOMATIC" not in row[3] for row in plan):
+					names = ", ".join(row[3] for row in rows)
+					print(f"Consider an index: '{label}' ({names}), foreign key {key_id}; lookup scans the table (check index columns and collations)")
+					issues += 1
+			except sqlite3.Error as error:
+				print(f"Cannot check index for '{label}', key {key_id}: {error}")
 				issues += 1
 
 	cursor.execute("PRAGMA foreign_keys;")
 	if has_foreign_keys and not cursor.fetchone()[0]:
 		print("Foreign key enforcement is disabled")
 		issues += 1
-
 	if not issues:
 		print("No foreign key or index issues found")
 
 
 def pale_fullschema(cursor):
-	cursor.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'view' THEN 2 ELSE 3 END, name")
-	rows = cursor.fetchall()
-
-	if not rows:
-		print("-- No schema found")
-
-	for sql, in rows:
-		print(sql.rstrip().rstrip(";") + ";")
-
-	cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'sqlite_stat*' ORDER BY name")
-	tables = cursor.fetchall()
-
-	if not tables:
-		print("-- No statistics found")
-		return
-
-	print("ANALYZE sqlite_schema;")
-
-	for table_name, in tables:
-		quoted_name = '"' + table_name.replace('"', '""') + '"'
-		print(f"DELETE FROM {quoted_name};")
-		cursor.execute(f"SELECT * FROM {quoted_name}")
+	for seq, database, file in get_databases(cursor):
+		if database not in ("main", "temp"):
+			print(f"ATTACH DATABASE ':memory:' AS {quote_name(database)};")
+	pale_schema(cursor)
+	found = False
+	for database, kind, name, table, sql in database_objects(cursor, "table"):
+		if not name.startswith("sqlite_stat"):
+			continue
+		found = True
+		qualified = quote_name(database) + "." + quote_name(name)
+		print(f"ANALYZE {quote_name(database)}.sqlite_schema;")
+		print(f"DELETE FROM {qualified};")
+		cursor.execute(f"SELECT * FROM {qualified}")
 		rows = cursor.fetchall()
-
 		for row in rows:
-			placeholders = ", ".join("quote(?)" for value in row)
-			cursor.execute(f"SELECT {placeholders}", row)
-			values = ", ".join(cursor.fetchone())
-			print(f"INSERT INTO {quoted_name} VALUES ({values});")
-
-	print("ANALYZE sqlite_schema;")
+			values = []
+			for value in row:
+				if isinstance(value, str) and "\x00" in value:
+					values.append("CAST(X'" + value.encode("utf-8").hex() + "' AS TEXT)")
+				else:
+					cursor.execute("SELECT quote(?)", (value,))
+					values.append(cursor.fetchone()[0])
+			print(f"INSERT INTO {qualified} VALUES ({', '.join(values)});")
+		print(f"ANALYZE {quote_name(database)}.sqlite_schema;")
+	if not found:
+		print("-- No statistics found")
 
 
 def pale_columns(cursor, table_name):
-	quoted_name = table_name.replace("'", "''")
-	cursor.execute(f"PRAGMA table_info('{quoted_name}');")
-	rows = cursor.fetchall()
-
-	if not rows:
+	table = find_table(cursor, table_name)
+	if table is None:
 		print(f"Table '{table_name}' not found")
 		return
+	database, name = table
+	rows = table_pragma(cursor, database, "table_xinfo", name)
 
-	print(f"{'name':<20} | {'type':<12} | {'NOT NULL':<8} | {'DEFAULT':<20} | PRIMARY KEY")
+	print(f"{'name':<20} | {'type':<12} | {'NOT NULL':<8} | {'DEFAULT':<20} | {'PRIMARY KEY':<11} | kind")
 
-	for cid, name, column_type, not_null, default, primary_key in rows:
-		default = "NULL" if default is None else default
-		print(f"{name:<20} | {column_type:<12} | {not_null:<8} | {default:<20} | {primary_key}")
+	for cid, name, column_type, not_null, default, primary_key, hidden in rows:
+		default = "(none)" if default is None else default
+		kind = {0: "normal", 1: "hidden", 2: "generated virtual", 3: "generated stored"}[hidden]
+		print(f"{name:<20} | {column_type:<12} | {not_null:<8} | {default:<20} | {primary_key:<11} | {kind}")
 
 
 def pale_foreignkeys(cursor, table_name):
-	quoted_name = table_name.replace("'", "''")
-	cursor.execute(f"PRAGMA foreign_key_list('{quoted_name}');")
-	rows = cursor.fetchall()
+	table = find_table(cursor, table_name)
+	if table is None:
+		print(f"Table '{table_name}' not found")
+		return
+	database, name = table
+	rows = table_pragma(cursor, database, "foreign_key_list", name)
 
 	if not rows:
 		print("No foreign keys found")
