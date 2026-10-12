@@ -25,6 +25,7 @@ def pale_help():
 		".database - show current main database\n"
 		".databases - show all attached databases\n"
 		".tables [pattern] - show tables, optionally filtered by pattern\n"
+		".columns <table> - show table columns\n"
 		".clear - clear SQL buffer\n"
 		".version - show PaleSQL, Python and SQLite versions\n"
 		".exit or .quit - exit PaleSQL\n"
@@ -88,6 +89,22 @@ def pale_schema(cursor, table_name):
 		return
 
 	print(row[0])
+
+
+def pale_columns(cursor, table_name):
+	quoted_name = table_name.replace("'", "''")
+	cursor.execute(f"PRAGMA table_info('{quoted_name}');")
+	rows = cursor.fetchall()
+
+	if not rows:
+		print(f"Table '{table_name}' not found")
+		return
+
+	print(f"{'name':<20} | {'type':<12} | {'NOT NULL':<8} | {'DEFAULT':<20} | PRIMARY KEY")
+
+	for cid, name, column_type, not_null, default, primary_key in rows:
+		default = "NULL" if default is None else default
+		print(f"{name:<20} | {column_type:<12} | {not_null:<8} | {default:<20} | {primary_key}")
 
 
 def main():
@@ -171,6 +188,14 @@ def main():
 					continue
 
 				pale_schema(cursor, argument)
+				continue
+
+			if command == ".columns":
+				if not argument:
+					print("No table name provided")
+					continue
+
+				pale_columns(cursor, argument)
 				continue
 
 			if command == ".close":
