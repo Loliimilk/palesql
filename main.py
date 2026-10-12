@@ -24,6 +24,7 @@ def pale_help():
 		".close - close current database\n"
 		".database - show current main database\n"
 		".databases - show all attached databases\n"
+		".dbinfo [database] - show database information, defaults to main\n"
 		".tables [pattern] - show tables, optionally filtered by pattern\n"
 		".views - show views\n"
 		".triggers - show triggers\n"
@@ -70,6 +71,32 @@ def pale_database(cursor):
 
 def pale_databases(cursor):
 	print_databases(get_databases(cursor))
+
+def pale_dbinfo(cursor, database_name):
+	rows = get_databases(cursor)
+	database = next((row for row in rows if row[1].lower() == database_name.lower()), None)
+
+	if database is None:
+		print(f"Database '{database_name}' not found")
+		return
+
+	seq, name, file = database
+	quoted_name = '"' + name.replace('"', '""') + '"'
+	info = {}
+
+	for pragma in ("page_size", "page_count", "encoding", "schema_version", "freelist_count", "user_version", "journal_mode"):
+		cursor.execute(f"PRAGMA {quoted_name}.{pragma};")
+		info[pragma] = cursor.fetchone()[0]
+
+	print(f"{'database':<20} | {name}")
+	print(f"{'file':<20} | {file or '(no file)'}")
+
+	for pragma, value in info.items():
+		label = pragma.replace("_", " ")
+		print(f"{label:<20} | {value}")
+
+	print(f"{'size (bytes)':<20} | {info['page_size'] * info['page_count']}")
+	print(f"{'free space (bytes)':<20} | {info['page_size'] * info['freelist_count']}")
 
 def pale_tables(cursor, pattern):
 	cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?", (pattern,))
@@ -326,6 +353,10 @@ def main():
 
 			if command == ".databases":
 				pale_databases(cursor)
+				continue
+
+			if command == ".dbinfo":
+				pale_dbinfo(cursor, argument or "main")
 				continue
 
 			if command.startswith("."):
