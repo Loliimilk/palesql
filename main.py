@@ -26,6 +26,7 @@ def pale_help():
 		".databases - show all attached databases\n"
 		".tables [pattern] - show tables, optionally filtered by pattern\n"
 		".columns <table> - show table columns\n"
+		".indexes [table] - show indexes, optionally filtered by table\n"
 		".clear - clear SQL buffer\n"
 		".version - show PaleSQL, Python and SQLite versions\n"
 		".exit or .quit - exit PaleSQL\n"
@@ -68,6 +69,14 @@ def pale_databases(cursor):
 
 def pale_tables(cursor, pattern):
 	cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?", (pattern,))
+	return cursor.fetchall()
+
+def pale_indexes(cursor, table_name):
+	if table_name:
+		cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? COLLATE NOCASE ORDER BY name", (table_name,))
+	else:
+		cursor.execute("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
+
 	return cursor.fetchall()
 
 def execute_sql(cursor, sql):
@@ -180,6 +189,16 @@ def main():
 						print(table[0])
 				else:
 					print("No tables found")
+				continue
+
+			if command == ".indexes":
+				indexes = pale_indexes(cursor, argument)
+
+				if indexes:
+					for index in indexes:
+						print(index[0])
+				else:
+					print("No indexes found")
 				continue
 
 			if command == ".schema":
