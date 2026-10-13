@@ -30,6 +30,7 @@ def pale_help():
 	print(
 		".help - show commands\n"
 		".print <text> - print literal text (no argument prints a blank line)\n"
+		".prompt <main> <continue> - set prompts; quote text containing spaces\n"
 		".open <database> - open or create database\n"
 		".close - close current database\n"
 		".database - show current main database\n"
@@ -553,10 +554,12 @@ def main():
 	row_separator = None
 	column_widths = ()
 	crlf = False
+	main_prompt = "PaleSQL: "
+	continue_prompt = "    ...: "
 
 	try:
 		while True:
-			inp = input("PaleSQL: ")
+			inp = input(continue_prompt if sql else main_prompt)
 			message = re.fullmatch(r"\.print(?:[ \t](.*))?", inp.lstrip(), re.IGNORECASE)
 			if message:
 				newline = "\r\n" if crlf and not sys.stdout.isatty() else "\n"
@@ -577,6 +580,21 @@ def main():
 
 			if command == ".version":
 				pale_version()
+				continue
+
+			if command == ".prompt":
+				try:
+					lexer = shlex.shlex(argument, posix=True)
+					lexer.whitespace_split = True
+					lexer.commenters = ""
+					lexer.escape = ""
+					prompts = list(lexer)
+					if len(prompts) != 2:
+						raise ValueError
+				except ValueError:
+					print('Usage: .prompt <main> <continue> (example: .prompt "sql> " "...> ")')
+					continue
+				main_prompt, continue_prompt = prompts
 				continue
 
 			if command == ".crlf":
