@@ -36,6 +36,7 @@ def pale_help():
 		".schema [pattern] - show schema, optionally filtered by name/pattern\n"
 		".fullschema - show full schema and statistics\n"
 		".lint - check foreign keys and suggest indexes\n"
+		".headers on|off - show or hide column names in SQL results\n"
 		".clear - clear SQL buffer\n"
 		".version - show PaleSQL, Python and SQLite versions\n"
 		".exit or .quit - exit PaleSQL\n"
@@ -181,11 +182,13 @@ def pale_indexes(cursor, table_name):
 			rows.append((object_label(database, name),))
 	return rows
 
-def execute_sql(cursor, sql):
+def execute_sql(cursor, sql, headers=False):
 	try:
 		cursor.execute(sql)
 
 		if cursor.description:
+			if headers:
+				print([column[0] for column in cursor.description])
 			print(cursor.fetchall())
 
 	except sqlite3.Error as error:
@@ -360,6 +363,7 @@ def main():
 	sql = ""
 	con = None
 	cursor = None
+	headers = False
 
 	try:
 		while True:
@@ -378,6 +382,14 @@ def main():
 
 			if command == ".version":
 				pale_version()
+				continue
+
+			if command == ".headers":
+				if argument.lower() not in ("on", "off"):
+					print("Usage: .headers on|off")
+					continue
+
+				headers = argument.lower() == "on"
 				continue
 
 			if command == ".clear":
@@ -511,7 +523,7 @@ def main():
 			sql += inp + "\n"
 
 			if sqlite3.complete_statement(sql):
-				execute_sql(cursor, sql)
+				execute_sql(cursor, sql, headers)
 				sql = ""
 
 	finally:
