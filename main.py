@@ -46,6 +46,7 @@ def pale_help():
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
 		"Changing .mode resets separators to that mode's defaults.\n"
+		".crlf on|off - file output line endings (default: off/LF); explicit row separator wins\n"
 		".headers on|off - show or hide column names in SQL results\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
@@ -235,7 +236,16 @@ def wrap_cell(text, width):
 	lines.append(line)
 	return lines
 
-def print_grid(names, rows, headers, mode, nullvalue="", column_widths=()):
+def write_result(text):
+	if not sys.stdout.isatty() and hasattr(sys.stdout, "buffer"):
+		sys.stdout.flush()
+		sys.stdout.buffer.write(text.encode(sys.stdout.encoding or "utf-8"))
+		sys.stdout.buffer.flush()
+	else:
+		sys.stdout.write(text)
+
+def print_grid(names, rows, headers, mode, nullvalue="", column_widths=(), newline="\n"):
+	emit = lambda text="": write_result(text + newline)
 	data = ([names] if headers else []) + rows
 	if not data:
 		return
@@ -253,12 +263,12 @@ def print_grid(names, rows, headers, mode, nullvalue="", column_widths=()):
 			if len(names) > 1:
 				# Keep every value when even the narrowest multi-column grid cannot fit.
 				for index, name in enumerate(names):
-					print_grid([name], [[row[index]] for row in rows], headers, mode, nullvalue, column_widths[index:index + 1])
+					print_grid([name], [[row[index]] for row in rows], headers, mode, nullvalue, column_widths[index:index + 1], newline)
 				return
 			for row in data:
 				for line in row[0]:
 					for part in wrap_cell(line, limit):
-						print(part)
+						emit(part)
 			return
 		widths = [max(min(width, limit), minimum) for width, minimum in zip(widths, minimums)]
 		while sum(widths) + overhead > limit:
@@ -272,7 +282,7 @@ def print_grid(names, rows, headers, mode, nullvalue="", column_widths=()):
 		vertical = "|"
 	def border(parts):
 		stroke = "─" if mode == "box" else "-"
-		print(parts[0] + parts[1].join(stroke * (width + 2) for width in widths) + parts[2])
+		emit(parts[0] + parts[1].join(stroke * (width + 2) for width in widths) + parts[2])
 	if mode != "column":
 		border(top)
 	for index, row in enumerate(data):
@@ -281,10 +291,10 @@ def print_grid(names, rows, headers, mode, nullvalue="", column_widths=()):
 			for cell, width in zip(row, widths):
 				line = cell[line_number] if line_number < len(cell) else ""
 				cells.append(line + " " * (width - text_width(line)))
-			print("  ".join(cells).rstrip() if mode == "column" else vertical + " " + (" " + vertical + " ").join(cells) + " " + vertical)
+			emit("  ".join(cells).rstrip() if mode == "column" else vertical + " " + (" " + vertical + " ").join(cells) + " " + vertical)
 		if headers and index == 0:
 			if mode == "column":
-				print("  ".join("-" * width for width in widths))
+				emit("  ".join("-" * width for width in widths))
 			else:
 				border(middle)
 	if mode != "column":
@@ -301,7 +311,9 @@ def parse_separators(argument):
 	escapes = {"t": "\t", "n": "\n", "r": "\r", "\\": "\\"}
 	return [re.sub(r"\\([tnr\\])", lambda match: escapes[match[1]], value) for value in values]
 
-def print_results(names, rows, headers, mode, nullvalue="", column_separator=None, row_separator=None, column_widths=()):
+def print_results(names, rows, headers, mode, nullvalue="", column_separator=None, row_separator=None, column_widths=(), newline=None):
+	ending = newline if newline is not None else "\n"
+	emit = lambda text="": write_result(text + ending)
 	if mode in ("json", "jsonpretty"):
 		values = [[value.hex() if isinstance(value, bytes) else None if isinstance(value, float) and not math.isfinite(value) else value for value in row] for row in rows]
 		if headers:
@@ -313,11 +325,11 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 					suffix += 1
 				keys.append(key)
 			values = [dict(zip(keys, row)) for row in values]
-		print(json.dumps(values, ensure_ascii=False, allow_nan=False, indent=2 if mode == "jsonpretty" else None))
+		emit(json.dumps(values, ensure_ascii=False, allow_nan=False, indent=2 if mode == "jsonpretty" else None).replace("\n", ending))
 	elif mode in ("csv", "tabs"):
 		output = io.StringIO(newline="")
 		separator = column_separator if column_separator is not None else "," if mode == "csv" else "\t"
-		ending = row_separator if row_separator is not None else "\r\n"
+		ending = row_separator if row_separator is not None else newline if newline is not None else "\r\n"
 		for row in ([names] if headers else []) + rows:
 			fields = []
 			for value in row:
@@ -326,45 +338,40 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 					text = '"' + text.replace('"', '""') + '"'
 				fields.append(text)
 			output.write(separator.join(fields) + ending)
-		if hasattr(sys.stdout, "buffer"):
-			# Avoid Windows newline translation corrupting CSV records and fields.
-			sys.stdout.flush()
-			sys.stdout.buffer.write(output.getvalue().encode(sys.stdout.encoding or "utf-8"))
-			sys.stdout.buffer.flush()
-		else:
-			sys.stdout.write(output.getvalue())
+		write_result(output.getvalue())
 	elif mode in ("column", "table", "box"):
-		print_grid(names, rows, headers, mode, nullvalue, column_widths)
+		print_grid(names, rows, headers, mode, nullvalue, column_widths, ending)
 	elif mode == "markdown":
 		def cell(value):
 			return result_text(value, nullvalue).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\\", "\\\\").replace("|", "\\|").replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
-		print("| " + " | ".join(cell(name) if headers else "" for name in names) + " |")
-		print("| " + " | ".join("---" for name in names) + " |")
+		emit("| " + " | ".join(cell(name) if headers else "" for name in names) + " |")
+		emit("| " + " | ".join("---" for name in names) + " |")
 		for row in rows:
-			print("| " + " | ".join(cell(value) for value in row) + " |")
+			emit("| " + " | ".join(cell(value) for value in row) + " |")
 	elif mode == "line":
 		for index, row in enumerate(rows):
 			if index:
-				print()
+				emit()
 			for name, value in zip(names, row):
 				text = result_text(value, nullvalue).replace("\r", "\\r").replace("\n", "\\n")
-				print(f"{name} = {text}" if headers else text)
+				emit(f"{name} = {text}" if headers else text)
 	else:
 		separator = "," if mode == "quote" else column_separator if column_separator is not None else "|"
-		ending = "\n" if mode == "quote" or row_separator is None else row_separator
+		ending = ending if mode == "quote" or row_separator is None else row_separator
 		format_value = sql_literal if mode == "quote" else lambda value: result_text(value, nullvalue)
 		if headers:
-			print(separator.join(format_value(name) for name in names), end=ending)
+			emit(separator.join(format_value(name) for name in names))
 		for row in rows:
-			print(separator.join(format_value(value) for value in row), end=ending)
+			emit(separator.join(format_value(value) for value in row))
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=()):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False):
 	try:
 		cursor.execute(sql)
 
 		if cursor.description:
 			names = [column[0] for column in cursor.description]
-			print_results(names, cursor.fetchall(), headers, mode, nullvalue, column_separator, row_separator, column_widths)
+			newline = "\r\n" if crlf and not sys.stdout.isatty() else "\n"
+			print_results(names, cursor.fetchall(), headers, mode, nullvalue, column_separator, row_separator, column_widths, newline)
 
 	except sqlite3.Error as error:
 		print("SQL error:", error)
@@ -544,6 +551,7 @@ def main():
 	column_separator = None
 	row_separator = None
 	column_widths = ()
+	crlf = False
 
 	try:
 		while True:
@@ -562,6 +570,13 @@ def main():
 
 			if command == ".version":
 				pale_version()
+				continue
+
+			if command == ".crlf":
+				if argument.lower() not in ("on", "off"):
+					print("Usage: .crlf on|off")
+					continue
+				crlf = argument.lower() == "on"
 				continue
 
 			if command == ".width":
@@ -743,7 +758,7 @@ def main():
 			sql += inp + "\n"
 
 			if sqlite3.complete_statement(sql):
-				execute_sql(cursor, sql, headers, mode, nullvalue, column_separator, row_separator, column_widths)
+				execute_sql(cursor, sql, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf)
 				sql = ""
 
 	finally:
