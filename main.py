@@ -2,12 +2,12 @@ import sys
 import sqlite3
 import os
 import re
-import csv
 import io
 import json
 import math
 import unicodedata
 import shutil
+import shlex
 
 
 PALESQL_VERSION = "0.2.0"
@@ -44,6 +44,8 @@ def pale_help():
 		".fullschema - show full schema and statistics\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
+		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
+		"Changing .mode resets separators to that mode's defaults.\n"
 		".headers on|off - show or hide column names in SQL results\n"
 		".mode <mode> - set output format (default: list)\n"
 		"Modes: list, column, table, box, csv, tabs, json, jsonpretty, line, markdown, quote\n"
@@ -282,7 +284,18 @@ def print_grid(names, rows, headers, mode, nullvalue=""):
 	if mode != "column":
 		border(bottom)
 
-def print_results(names, rows, headers, mode, nullvalue=""):
+def parse_separators(argument):
+	lexer = shlex.shlex(argument, posix=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	lexer.escape = ""
+	values = list(lexer)
+	if len(values) not in (1, 2):
+		raise ValueError("Usage: .separator <column-separator> [row-separator]")
+	escapes = {"t": "\t", "n": "\n", "r": "\r", "\\": "\\"}
+	return [re.sub(r"\\([tnr\\])", lambda match: escapes[match[1]], value) for value in values]
+
+def print_results(names, rows, headers, mode, nullvalue="", column_separator=None, row_separator=None):
 	if mode in ("json", "jsonpretty"):
 		values = [[value.hex() if isinstance(value, bytes) else None if isinstance(value, float) and not math.isfinite(value) else value for value in row] for row in rows]
 		if headers:
@@ -297,10 +310,16 @@ def print_results(names, rows, headers, mode, nullvalue=""):
 		print(json.dumps(values, ensure_ascii=False, allow_nan=False, indent=2 if mode == "jsonpretty" else None))
 	elif mode in ("csv", "tabs"):
 		output = io.StringIO(newline="")
-		writer = csv.writer(output, delimiter="," if mode == "csv" else "\t", lineterminator="\r\n")
-		if headers:
-			writer.writerow(names)
-		writer.writerows([[result_text(value, nullvalue) for value in row] for row in rows])
+		separator = column_separator if column_separator is not None else "," if mode == "csv" else "\t"
+		ending = row_separator if row_separator is not None else "\r\n"
+		for row in ([names] if headers else []) + rows:
+			fields = []
+			for value in row:
+				text = result_text(value, nullvalue)
+				if any(char in text for char in ('"', '\r', '\n')) or (separator and separator in text) or (ending and ending in text) or (len(row) == 1 and not text):
+					text = '"' + text.replace('"', '""') + '"'
+				fields.append(text)
+			output.write(separator.join(fields) + ending)
 		if hasattr(sys.stdout, "buffer"):
 			# Avoid Windows newline translation corrupting CSV records and fields.
 			sys.stdout.flush()
@@ -325,20 +344,21 @@ def print_results(names, rows, headers, mode, nullvalue=""):
 				text = result_text(value, nullvalue).replace("\r", "\\r").replace("\n", "\\n")
 				print(f"{name} = {text}" if headers else text)
 	else:
-		separator = "," if mode == "quote" else "|"
+		separator = "," if mode == "quote" else column_separator if column_separator is not None else "|"
+		ending = "\n" if mode == "quote" or row_separator is None else row_separator
 		format_value = sql_literal if mode == "quote" else lambda value: result_text(value, nullvalue)
 		if headers:
-			print(separator.join(format_value(name) for name in names))
+			print(separator.join(format_value(name) for name in names), end=ending)
 		for row in rows:
-			print(separator.join(format_value(value) for value in row))
+			print(separator.join(format_value(value) for value in row), end=ending)
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue=""):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None):
 	try:
 		cursor.execute(sql)
 
 		if cursor.description:
 			names = [column[0] for column in cursor.description]
-			print_results(names, cursor.fetchall(), headers, mode, nullvalue)
+			print_results(names, cursor.fetchall(), headers, mode, nullvalue, column_separator, row_separator)
 
 	except sqlite3.Error as error:
 		print("SQL error:", error)
@@ -515,6 +535,8 @@ def main():
 	headers = False
 	mode = "list"
 	nullvalue = ""
+	column_separator = None
+	row_separator = None
 
 	try:
 		while True:
@@ -535,6 +557,17 @@ def main():
 				pale_version()
 				continue
 
+			if command == ".separator":
+				try:
+					separators = parse_separators(argument)
+				except ValueError as error:
+					print(error)
+					continue
+				column_separator = separators[0]
+				if len(separators) == 2:
+					row_separator = separators[1]
+				continue
+
 			if command == ".nullvalue":
 				if not argument:
 					print('Usage: .nullvalue <text> (use "" for empty text)')
@@ -549,6 +582,8 @@ def main():
 					print("Usage: .mode " + "|".join(OUTPUT_MODES))
 					continue
 				mode = argument.lower()
+				column_separator = None
+				row_separator = None
 				continue
 
 			if command == ".headers":
@@ -690,7 +725,7 @@ def main():
 			sql += inp + "\n"
 
 			if sqlite3.complete_statement(sql):
-				execute_sql(cursor, sql, headers, mode, nullvalue)
+				execute_sql(cursor, sql, headers, mode, nullvalue, column_separator, row_separator)
 				sql = ""
 
 	finally:
