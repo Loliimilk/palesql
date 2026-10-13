@@ -2,11 +2,18 @@ import sys
 import sqlite3
 import os
 import re
+import csv
+import io
+import json
+import math
+import unicodedata
+import shutil
 
 
 PALESQL_VERSION = "0.2.0"
 PYTHON_VERSION = sys.version.split()[0]
 SQLITE_LIBRARY_VERSION = sqlite3.sqlite_version
+OUTPUT_MODES = ("list", "column", "table", "box", "csv", "tabs", "json", "jsonpretty", "line", "markdown", "quote")
 
 
 def pale_open(name):
@@ -37,6 +44,12 @@ def pale_help():
 		".fullschema - show full schema and statistics\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".headers on|off - show or hide column names in SQL results\n"
+		".mode <mode> - set output format (default: list)\n"
+		"Modes: list, column, table, box, csv, tabs, json, jsonpretty, line, markdown, quote\n"
+		"jsonpretty formats JSON with two-space indentation.\n"
+		"JSON: arrays with headers off, objects with headers on; duplicate names get suffixes.\n"
+		"JSON represents non-finite numbers as null. Text formats display NULL as empty.\n"
+		"BLOB values use hexadecimal text; quote mode uses SQL literals.\n"
 		".clear - clear SQL buffer\n"
 		".version - show PaleSQL, Python and SQLite versions\n"
 		".exit or .quit - exit PaleSQL\n"
@@ -182,14 +195,149 @@ def pale_indexes(cursor, table_name):
 			rows.append((object_label(database, name),))
 	return rows
 
-def execute_sql(cursor, sql, headers=False):
+def result_text(value):
+	if value is None:
+		return ""
+	if isinstance(value, bytes):
+		return value.hex()
+	return str(value)
+
+def sql_literal(value):
+	if value is None:
+		return "NULL"
+	if isinstance(value, bytes):
+		return "X'" + value.hex() + "'"
+	if isinstance(value, str):
+		if "\x00" in value:
+			return "CAST(X'" + value.encode("utf-8").hex() + "' AS TEXT)"
+		return "'" + value.replace("'", "''") + "'"
+	if isinstance(value, float) and not math.isfinite(value):
+		return "NULL" if math.isnan(value) else ("-9e999" if value < 0 else "9e999")
+	return str(value)
+
+def text_width(text):
+	return sum(0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1 for char in text)
+
+def wrap_cell(text, width):
+	lines, line, used = [], "", 0
+	for char in text:
+		size = text_width(char)
+		if used + size > width and line:
+			lines.append(line)
+			line, used = "", 0
+		line += char
+		used += size
+	lines.append(line)
+	return lines
+
+def print_grid(names, rows, headers, mode):
+	data = ([names] if headers else []) + rows
+	if not data:
+		return
+	data = [[result_text(value).replace("\r", "\\r").replace("\t", "\\t").replace("\x00", "\\0").split("\n") for value in row] for row in data]
+	widths = [max(text_width(line) for row in data for line in row[index]) for index in range(len(names))]
+	if sys.stdout.isatty():
+		limit = max(2, shutil.get_terminal_size().columns - 1)
+		overhead = 2 * (len(names) - 1) if mode == "column" else 3 * len(names) + 1
+		minimums = [max(1, max((text_width(char) for row in data for line in row[index] for char in line), default=1)) for index in range(len(names))]
+		if sum(minimums) + overhead > limit:
+			if len(names) > 1:
+				# Keep every value when even the narrowest multi-column grid cannot fit.
+				for index, name in enumerate(names):
+					print_grid([name], [[row[index]] for row in rows], headers, mode)
+				return
+			for row in data:
+				for line in row[0]:
+					for part in wrap_cell(line, limit):
+						print(part)
+			return
+		widths = [max(width, minimum) for width, minimum in zip(widths, minimums)]
+		while sum(widths) + overhead > limit:
+			index = max((i for i in range(len(widths)) if widths[i] > minimums[i]), key=lambda i: widths[i])
+			widths[index] -= 1
+		data = [[[part for line in cell for part in wrap_cell(line, width)] for cell, width in zip(row, widths)] for row in data]
+	if mode == "box":
+		top, middle, bottom, vertical = ("┌", "┬", "┐"), ("├", "┼", "┤"), ("└", "┴", "┘"), "│"
+	else:
+		top = middle = bottom = ("+", "+", "+")
+		vertical = "|"
+	def border(parts):
+		stroke = "─" if mode == "box" else "-"
+		print(parts[0] + parts[1].join(stroke * (width + 2) for width in widths) + parts[2])
+	if mode != "column":
+		border(top)
+	for index, row in enumerate(data):
+		for line_number in range(max(len(cell) for cell in row)):
+			cells = []
+			for cell, width in zip(row, widths):
+				line = cell[line_number] if line_number < len(cell) else ""
+				cells.append(line + " " * (width - text_width(line)))
+			print("  ".join(cells).rstrip() if mode == "column" else vertical + " " + (" " + vertical + " ").join(cells) + " " + vertical)
+		if headers and index == 0:
+			if mode == "column":
+				print("  ".join("-" * width for width in widths))
+			else:
+				border(middle)
+	if mode != "column":
+		border(bottom)
+
+def print_results(names, rows, headers, mode):
+	if mode in ("json", "jsonpretty"):
+		values = [[value.hex() if isinstance(value, bytes) else None if isinstance(value, float) and not math.isfinite(value) else value for value in row] for row in rows]
+		if headers:
+			keys = []
+			for name in names:
+				key, suffix = name, 2
+				while key in keys or (key != name and key in names):
+					key = f"{name}_{suffix}"
+					suffix += 1
+				keys.append(key)
+			values = [dict(zip(keys, row)) for row in values]
+		print(json.dumps(values, ensure_ascii=False, allow_nan=False, indent=2 if mode == "jsonpretty" else None))
+	elif mode in ("csv", "tabs"):
+		output = io.StringIO(newline="")
+		writer = csv.writer(output, delimiter="," if mode == "csv" else "\t", lineterminator="\r\n")
+		if headers:
+			writer.writerow(names)
+		writer.writerows([[result_text(value) for value in row] for row in rows])
+		if hasattr(sys.stdout, "buffer"):
+			# Avoid Windows newline translation corrupting CSV records and fields.
+			sys.stdout.flush()
+			sys.stdout.buffer.write(output.getvalue().encode(sys.stdout.encoding or "utf-8"))
+			sys.stdout.buffer.flush()
+		else:
+			sys.stdout.write(output.getvalue())
+	elif mode in ("column", "table", "box"):
+		print_grid(names, rows, headers, mode)
+	elif mode == "markdown":
+		def cell(value):
+			return result_text(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\\", "\\\\").replace("|", "\\|").replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+		print("| " + " | ".join(cell(name) if headers else "" for name in names) + " |")
+		print("| " + " | ".join("---" for name in names) + " |")
+		for row in rows:
+			print("| " + " | ".join(cell(value) for value in row) + " |")
+	elif mode == "line":
+		for index, row in enumerate(rows):
+			if index:
+				print()
+			for name, value in zip(names, row):
+				text = result_text(value).replace("\r", "\\r").replace("\n", "\\n")
+				print(f"{name} = {text}" if headers else text)
+	else:
+		separator = "," if mode == "quote" else "|"
+		format_value = sql_literal if mode == "quote" else result_text
+		if headers:
+			print(separator.join(format_value(name) for name in names))
+		for row in rows:
+			print(separator.join(format_value(value) for value in row))
+
+def execute_sql(cursor, sql, headers=False, mode="list"):
 	try:
 		cursor.execute(sql)
 
 		if cursor.description:
-			if headers:
-				print([column[0] for column in cursor.description])
-			print(cursor.fetchall())
+			names = [column[0] for column in cursor.description]
+			print_results(names, cursor.fetchall(), headers, mode)
 
 	except sqlite3.Error as error:
 		print("SQL error:", error)
@@ -364,6 +512,7 @@ def main():
 	con = None
 	cursor = None
 	headers = False
+	mode = "list"
 
 	try:
 		while True:
@@ -382,6 +531,13 @@ def main():
 
 			if command == ".version":
 				pale_version()
+				continue
+
+			if command == ".mode":
+				if argument.lower() not in OUTPUT_MODES:
+					print("Usage: .mode " + "|".join(OUTPUT_MODES))
+					continue
+				mode = argument.lower()
 				continue
 
 			if command == ".headers":
@@ -523,7 +679,7 @@ def main():
 			sql += inp + "\n"
 
 			if sqlite3.complete_statement(sql):
-				execute_sql(cursor, sql, headers)
+				execute_sql(cursor, sql, headers, mode)
 				sql = ""
 
 	finally:
