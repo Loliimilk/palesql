@@ -3,6 +3,7 @@ __pycache__/
 venv/
 .env
 test_main.py
+*.sql
 
 *.db
 *.exe

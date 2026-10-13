@@ -43,12 +43,13 @@ def pale_help():
 		".schema [pattern] - show schema, optionally filtered by name/pattern\n"
 		".fullschema - show full schema and statistics\n"
 		".lint - check foreign keys and suggest indexes\n"
+		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".headers on|off - show or hide column names in SQL results\n"
 		".mode <mode> - set output format (default: list)\n"
 		"Modes: list, column, table, box, csv, tabs, json, jsonpretty, line, markdown, quote\n"
 		"jsonpretty formats JSON with two-space indentation.\n"
 		"JSON: arrays with headers off, objects with headers on; duplicate names get suffixes.\n"
-		"JSON represents non-finite numbers as null. Text formats display NULL as empty.\n"
+		"JSON represents non-finite numbers as null. Text formats display NULL using .nullvalue (default: empty).\n"
 		"BLOB values use hexadecimal text; quote mode uses SQL literals.\n"
 		".clear - clear SQL buffer\n"
 		".version - show PaleSQL, Python and SQLite versions\n"
@@ -195,9 +196,9 @@ def pale_indexes(cursor, table_name):
 			rows.append((object_label(database, name),))
 	return rows
 
-def result_text(value):
+def result_text(value, nullvalue=""):
 	if value is None:
-		return ""
+		return nullvalue
 	if isinstance(value, bytes):
 		return value.hex()
 	return str(value)
@@ -230,11 +231,11 @@ def wrap_cell(text, width):
 	lines.append(line)
 	return lines
 
-def print_grid(names, rows, headers, mode):
+def print_grid(names, rows, headers, mode, nullvalue=""):
 	data = ([names] if headers else []) + rows
 	if not data:
 		return
-	data = [[result_text(value).replace("\r", "\\r").replace("\t", "\\t").replace("\x00", "\\0").split("\n") for value in row] for row in data]
+	data = [[result_text(value, nullvalue).replace("\r", "\\r").replace("\t", "\\t").replace("\x00", "\\0").split("\n") for value in row] for row in data]
 	widths = [max(text_width(line) for row in data for line in row[index]) for index in range(len(names))]
 	if sys.stdout.isatty():
 		limit = max(2, shutil.get_terminal_size().columns - 1)
@@ -244,7 +245,7 @@ def print_grid(names, rows, headers, mode):
 			if len(names) > 1:
 				# Keep every value when even the narrowest multi-column grid cannot fit.
 				for index, name in enumerate(names):
-					print_grid([name], [[row[index]] for row in rows], headers, mode)
+					print_grid([name], [[row[index]] for row in rows], headers, mode, nullvalue)
 				return
 			for row in data:
 				for line in row[0]:
@@ -281,7 +282,7 @@ def print_grid(names, rows, headers, mode):
 	if mode != "column":
 		border(bottom)
 
-def print_results(names, rows, headers, mode):
+def print_results(names, rows, headers, mode, nullvalue=""):
 	if mode in ("json", "jsonpretty"):
 		values = [[value.hex() if isinstance(value, bytes) else None if isinstance(value, float) and not math.isfinite(value) else value for value in row] for row in rows]
 		if headers:
@@ -299,7 +300,7 @@ def print_results(names, rows, headers, mode):
 		writer = csv.writer(output, delimiter="," if mode == "csv" else "\t", lineterminator="\r\n")
 		if headers:
 			writer.writerow(names)
-		writer.writerows([[result_text(value) for value in row] for row in rows])
+		writer.writerows([[result_text(value, nullvalue) for value in row] for row in rows])
 		if hasattr(sys.stdout, "buffer"):
 			# Avoid Windows newline translation corrupting CSV records and fields.
 			sys.stdout.flush()
@@ -308,10 +309,10 @@ def print_results(names, rows, headers, mode):
 		else:
 			sys.stdout.write(output.getvalue())
 	elif mode in ("column", "table", "box"):
-		print_grid(names, rows, headers, mode)
+		print_grid(names, rows, headers, mode, nullvalue)
 	elif mode == "markdown":
 		def cell(value):
-			return result_text(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\\", "\\\\").replace("|", "\\|").replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+			return result_text(value, nullvalue).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\\", "\\\\").replace("|", "\\|").replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
 		print("| " + " | ".join(cell(name) if headers else "" for name in names) + " |")
 		print("| " + " | ".join("---" for name in names) + " |")
 		for row in rows:
@@ -321,23 +322,23 @@ def print_results(names, rows, headers, mode):
 			if index:
 				print()
 			for name, value in zip(names, row):
-				text = result_text(value).replace("\r", "\\r").replace("\n", "\\n")
+				text = result_text(value, nullvalue).replace("\r", "\\r").replace("\n", "\\n")
 				print(f"{name} = {text}" if headers else text)
 	else:
 		separator = "," if mode == "quote" else "|"
-		format_value = sql_literal if mode == "quote" else result_text
+		format_value = sql_literal if mode == "quote" else lambda value: result_text(value, nullvalue)
 		if headers:
 			print(separator.join(format_value(name) for name in names))
 		for row in rows:
 			print(separator.join(format_value(value) for value in row))
 
-def execute_sql(cursor, sql, headers=False, mode="list"):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue=""):
 	try:
 		cursor.execute(sql)
 
 		if cursor.description:
 			names = [column[0] for column in cursor.description]
-			print_results(names, cursor.fetchall(), headers, mode)
+			print_results(names, cursor.fetchall(), headers, mode, nullvalue)
 
 	except sqlite3.Error as error:
 		print("SQL error:", error)
@@ -513,6 +514,7 @@ def main():
 	cursor = None
 	headers = False
 	mode = "list"
+	nullvalue = ""
 
 	try:
 		while True:
@@ -531,6 +533,15 @@ def main():
 
 			if command == ".version":
 				pale_version()
+				continue
+
+			if command == ".nullvalue":
+				if not argument:
+					print('Usage: .nullvalue <text> (use "" for empty text)')
+					continue
+				if len(argument) >= 2 and argument[0] in ("\"", "'") and argument[-1] == argument[0]:
+					argument = argument[1:-1]
+				nullvalue = argument
 				continue
 
 			if command == ".mode":
@@ -679,7 +690,7 @@ def main():
 			sql += inp + "\n"
 
 			if sqlite3.complete_statement(sql):
-				execute_sql(cursor, sql, headers, mode)
+				execute_sql(cursor, sql, headers, mode, nullvalue)
 				sql = ""
 
 	finally:
