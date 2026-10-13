@@ -29,6 +29,7 @@ def pale_open(name):
 def pale_help():
 	print(
 		".help - show commands\n"
+		".print <text> - print literal text (no argument prints a blank line)\n"
 		".open <database> - open or create database\n"
 		".close - close current database\n"
 		".database - show current main database\n"
@@ -555,7 +556,13 @@ def main():
 
 	try:
 		while True:
-			inp = input("PaleSQL: ").strip()
+			inp = input("PaleSQL: ")
+			message = re.fullmatch(r"\.print(?:[ \t](.*))?", inp.lstrip(), re.IGNORECASE)
+			if message:
+				newline = "\r\n" if crlf and not sys.stdout.isatty() else "\n"
+				write_result((message[1] or "") + newline)
+				continue
+			inp = inp.strip()
 
 			if not inp:
 				continue
