@@ -65,6 +65,7 @@ def pale_help():
 		".crlf on|off - file output line endings (default: off/LF); explicit row separator wins\n"
 		".headers on|off - show or hide column names in SQL results\n"
 		".changes on|off - show changed row counts after INSERT/UPDATE/DELETE\n"
+		".timeout <milliseconds> - set the SQLite busy timeout\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -1124,6 +1125,24 @@ def main():
 					print("Usage: .changes on|off", file=sys.stderr if output_file else sys.stdout)
 					continue
 				changes = argument.lower() == "on"
+				continue
+
+			if command == ".timeout":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					milliseconds = int(argument)
+					if milliseconds < 0 or re.fullmatch(r"[0-9]+", argument) is None:
+						raise ValueError
+					con.execute(f"PRAGMA busy_timeout = {milliseconds}")
+				except ValueError:
+					print("Usage: .timeout <milliseconds> (non-negative integer)", file=sys.stderr if output_file else sys.stdout)
+					continue
+				except sqlite3.Error as error:
+					print(f"Timeout error: {error}", file=sys.stderr)
+					failed = True
 				continue
 
 			if command == ".clear":
