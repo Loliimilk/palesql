@@ -8,6 +8,7 @@ import math
 import unicodedata
 import shutil
 import shlex
+from pathlib import Path
 
 
 PALESQL_VERSION = "0.3.0"
@@ -29,6 +30,7 @@ def pale_open(name):
 def pale_help():
 	print(
 		".help - show commands\n"
+		".read <file.sql> - run UTF-8 SQL/dot commands; nested paths are relative to the script\n"
 		".print <text> - print literal text (no argument prints a blank line)\n"
 		".prompt <main> <continue> - set prompts; quote text containing spaces\n"
 		".open <database> - open or create database\n"
@@ -612,11 +614,35 @@ def main():
 	main_prompt = "PaleSQL: "
 	continue_prompt = "    ...: "
 	failed = False
+	scripts = []
+
+	def run_sql(buffer):
+		nonlocal failed
+		start = 0
+		for index, char in enumerate(buffer):
+			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
+				statement = buffer[start:index + 1]
+				if not execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf):
+					failed = True
+				start = index + 1
+		remaining = buffer[start:]
+		return remaining if sql_context(remaining)[1] or sql_context(remaining)[0] == "/*" else ""
 
 	try:
 		while True:
 			try:
-				inp = input((continue_prompt if sql else main_prompt) if interactive else "")
+				if scripts:
+					try:
+						inp = next(scripts[-1][1]).rstrip("\r\n")
+					except StopIteration:
+						path, lines = scripts.pop()
+						if sql_context(sql)[1] or sql_context(sql)[0] == "/*":
+							print(f"SQL error: incomplete statement at end of {path}", file=sys.stderr)
+							failed = True
+						sql = ""
+						continue
+				else:
+					inp = input((continue_prompt if sql else main_prompt) if interactive else "")
 			except EOFError:
 				if sql_context(sql)[1] or sql_context(sql)[0] == "/*":
 					print("SQL error: incomplete statement at end of input", file=sys.stderr)
@@ -624,10 +650,7 @@ def main():
 				break
 			if sql_context(sql)[0] not in ("", "--"):
 				sql += inp + "\n"
-				if sqlite3.complete_statement(sql):
-					if not execute_sql(cursor, sql, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf):
-						failed = True
-					sql = ""
+				sql = run_sql(sql)
 				continue
 			raw_input = inp
 
@@ -646,6 +669,35 @@ def main():
 			argument = parts[1] if len(parts) == 2 else ""
 			command = command.lower()
 			argument = argument.strip()
+
+			if command == ".read":
+				try:
+					if not argument:
+						raise ValueError("Usage: .read <file.sql>")
+					if argument[0] in ("'", '"'):
+						lexer = shlex.shlex(argument, posix=True)
+						lexer.whitespace_split = True
+						lexer.commenters = ""
+						lexer.escape = ""
+						paths = list(lexer)
+						if len(paths) != 1 or not paths[0]:
+							raise ValueError("Usage: .read <file.sql>")
+						argument = paths[0]
+					if sql_context(sql)[1]:
+						raise ValueError("Finish or clear the current SQL statement before .read")
+					path = Path(argument).expanduser()
+					if not path.is_absolute() and scripts:
+						path = scripts[-1][0].parent / path
+					path = path.resolve()
+					if any(path == active[0] for active in scripts) or len(scripts) >= 32:
+						raise ValueError("Recursive .read or nesting limit exceeded")
+					text = path.read_text(encoding="utf-8-sig")
+					scripts.append((path, iter(io.StringIO(text))))
+					sql = ""
+				except (OSError, UnicodeError, ValueError) as error:
+					print(f"Read error: {error}", file=sys.stderr)
+					failed = True
+				continue
 
 			if command == ".help":
 				pale_help()
@@ -756,7 +808,9 @@ def main():
 				continue
 
 			if con is None:
-				print("No database opened")
+				print("No database opened", file=sys.stderr if scripts else sys.stdout)
+				if scripts:
+					failed = True
 				continue
 
 			# DB is opened
@@ -857,10 +911,7 @@ def main():
 
 			sql += raw_input + "\n"
 
-			if sqlite3.complete_statement(sql):
-				if not execute_sql(cursor, sql, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf):
-					failed = True
-				sql = ""
+			sql = run_sql(sql)
 
 	finally:
 		if con is not None:
