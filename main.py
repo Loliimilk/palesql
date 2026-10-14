@@ -13,7 +13,7 @@ from pathlib import Path
 from contextlib import redirect_stdout
 
 
-PALESQL_VERSION = "0.3.0"
+PALESQL_VERSION = "0.4.0"
 PYTHON_VERSION = sys.version.split()[0]
 SQLITE_LIBRARY_VERSION = sqlite3.sqlite_version
 OUTPUT_MODES = ("list", "column", "table", "box", "csv", "tabs", "json", "jsonpretty", "line", "markdown", "quote")
@@ -508,15 +508,25 @@ def pale_dump(cursor, object_names=()):
 		print(sql.rstrip().rstrip(";") + ";")
 	print("COMMIT;")
 
-def parse_backup_arguments(argument):
+def parse_backup_arguments(argument, command=".backup"):
 	lexer = shlex.shlex(argument, posix=True)
 	lexer.whitespace_split = True
 	lexer.commenters = ""
 	lexer.escape = ""
 	values = list(lexer)
 	if len(values) not in (1, 2) or not values[-1]:
-		raise ValueError("Usage: .backup [database] <file>")
+		raise ValueError(f"Usage: {command} [database] <file>")
 	return ("main", values[0]) if len(values) == 1 else tuple(values)
+
+def parse_single_file_argument(argument, command):
+	lexer = shlex.shlex(argument, posix=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	lexer.escape = ""
+	values = list(lexer)
+	if len(values) != 1 or not values[0]:
+		raise ValueError(f"Usage: {command} <file>")
+	return values[0]
 
 def backup_database(con, cursor, database_name, filename, protected=()):
 	database = next((row[1] for row in get_databases(cursor) if identifier_key(row[1]) == identifier_key(database_name)), None)
@@ -776,6 +786,17 @@ def main():
 	output_file = None
 	once_file = None
 
+	def protected_backup_paths(include_sidecars=True):
+		paths = [active[0] for active in scripts]
+		for seq, name, file in get_databases(cursor):
+			if file:
+				suffixes = ("", "-wal", "-shm", "-journal") if include_sidecars else ("",)
+				paths.extend(Path(file + suffix).resolve() for suffix in suffixes)
+		for handle in (output_file, once_file):
+			if handle:
+				paths.append(Path(handle.name).resolve())
+		return paths
+
 	def run_sql(buffer):
 		nonlocal failed, once_file, output_file
 		start = 0
@@ -950,14 +971,7 @@ def main():
 					if con is None:
 						raise ValueError("No database opened")
 					database_name, filename = parse_backup_arguments(argument)
-					protected = [active[0] for active in scripts]
-					for seq, name, file in get_databases(cursor):
-						if file:
-							protected.extend(Path(file + suffix).resolve() for suffix in ("", "-wal", "-shm", "-journal"))
-					for handle in (output_file, once_file):
-						if handle:
-							protected.append(Path(handle.name).resolve())
-					backup_database(con, cursor, database_name, filename, protected)
+					backup_database(con, cursor, database_name, filename, protected_backup_paths())
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Backup error: {error}", file=sys.stderr)
 					failed = True
@@ -967,7 +981,7 @@ def main():
 				try:
 					if con is None:
 						raise ValueError("No database opened")
-					database_name, filename = parse_backup_arguments(argument)
+					database_name, filename = parse_backup_arguments(argument, ".restore")
 					restore_database(con, cursor, database_name, filename)
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Restore error: {error}", file=sys.stderr)
@@ -978,21 +992,8 @@ def main():
 				try:
 					if con is None:
 						raise ValueError("No database opened")
-					lexer = shlex.shlex(argument, posix=True)
-					lexer.whitespace_split = True
-					lexer.commenters = ""
-					lexer.escape = ""
-					values = list(lexer)
-					if len(values) != 1 or not values[0]:
-						raise ValueError("Usage: .save <file>")
-					protected = [active[0] for active in scripts]
-					for seq, name, file in get_databases(cursor):
-						if file:
-							protected.append(Path(file).resolve())
-					for handle in (output_file, once_file):
-						if handle:
-							protected.append(Path(handle.name).resolve())
-					backup_database(con, cursor, "main", values[0], protected)
+					filename = parse_single_file_argument(argument, ".save")
+					backup_database(con, cursor, "main", filename, protected_backup_paths(False))
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Save error: {error}", file=sys.stderr)
 					failed = True
@@ -1002,21 +1003,8 @@ def main():
 				try:
 					if con is None:
 						raise ValueError("No database opened")
-					lexer = shlex.shlex(argument, posix=True)
-					lexer.whitespace_split = True
-					lexer.commenters = ""
-					lexer.escape = ""
-					values = list(lexer)
-					if len(values) != 1 or not values[0]:
-						raise ValueError("Usage: .clone <file>")
-					protected = [active[0] for active in scripts]
-					for seq, name, file in get_databases(cursor):
-						if file:
-							protected.append(Path(file).resolve())
-					for handle in (output_file, once_file):
-						if handle:
-							protected.append(Path(handle.name).resolve())
-					backup_database(con, cursor, "main", values[0], protected)
+					filename = parse_single_file_argument(argument, ".clone")
+					backup_database(con, cursor, "main", filename, protected_backup_paths(False))
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Clone error: {error}", file=sys.stderr)
 					failed = True
