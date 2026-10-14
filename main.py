@@ -57,6 +57,7 @@ def pale_help():
 		".save <file> - save the current database to a file\n"
 		".clone <file> - clone the current database to a new file\n"
 		".excel - use spreadsheet-friendly CSV output with headers\n"
+		".dbtotxt - show a hex dump of the physical main database file\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
@@ -555,6 +556,22 @@ def restore_database(con, cursor, database_name, filename):
 	finally:
 		source.close()
 
+def pale_dbtotxt(cursor):
+	database = next((row for row in get_databases(cursor) if row[1] == "main"), None)
+	if database is None or not database[2]:
+		raise ValueError("main database has no physical file")
+	path = Path(database[2])
+	if not path.is_file():
+		raise OSError(f"database file not found: {path}")
+	with path.open("rb") as source:
+		offset = 0
+		while chunk := source.read(16):
+			hex_bytes = " ".join(f"{byte:02x}" for byte in chunk)
+			hex_bytes = f"{hex_bytes:<47}"
+			ascii_bytes = "".join(chr(byte) if 32 <= byte < 127 else "." for byte in chunk)
+			print(f"{offset:08x}  {hex_bytes}  |{ascii_bytes}|")
+			offset += len(chunk)
+
 
 def schema_sql(database, kind, name, sql):
 	# Qualify the declared object, leaving its body and string literals intact.
@@ -1013,6 +1030,19 @@ def main():
 				headers = True
 				column_separator = None
 				row_separator = None
+				continue
+
+			if command == ".dbtotxt":
+				if argument:
+					print("Usage: .dbtotxt", file=sys.stderr if output_file else sys.stdout)
+					continue
+				try:
+					if con is None:
+						raise ValueError("No database opened")
+					pale_dbtotxt(cursor)
+				except (OSError, ValueError) as error:
+					print(f"DB dump error: {error}", file=sys.stderr)
+					failed = True
 				continue
 
 			if command == ".help":
