@@ -64,6 +64,7 @@ def pale_help():
 		"Changing .mode resets separators to that mode's defaults.\n"
 		".crlf on|off - file output line endings (default: off/LF); explicit row separator wins\n"
 		".headers on|off - show or hide column names in SQL results\n"
+		".changes on|off - show changed row counts after INSERT/UPDATE/DELETE\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -401,7 +402,7 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 		for row in rows:
 			emit(separator.join(format_value(value) for value in row))
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False):
 	try:
 		cursor.execute(sql)
 
@@ -409,6 +410,8 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 			names = [column[0] for column in cursor.description]
 			newline = "\r\n" if crlf and not sys.stdout.isatty() else "\n"
 			print_results(names, cursor.fetchall(), headers, mode, nullvalue, column_separator, row_separator, column_widths, newline)
+		elif changes and cursor.rowcount >= 0:
+			print(f"changes: {cursor.rowcount}")
 		return True
 
 	except sqlite3.Error as error:
@@ -774,6 +777,7 @@ def main():
 	headers = False
 	mode = "list"
 	nullvalue = ""
+	changes = False
 	column_separator = None
 	row_separator = None
 	column_widths = ()
@@ -804,7 +808,7 @@ def main():
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
 				with redirect_stdout(once_file if once_file is not None else sys.stdout):
-					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf)
+					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes)
 				if not success:
 					failed = True
 				if once_file and (not success or cursor.description is not None):
@@ -1113,6 +1117,13 @@ def main():
 					continue
 
 				headers = argument.lower() == "on"
+				continue
+
+			if command == ".changes":
+				if argument.lower() not in ("on", "off"):
+					print("Usage: .changes on|off", file=sys.stderr if output_file else sys.stdout)
+					continue
+				changes = argument.lower() == "on"
 				continue
 
 			if command == ".clear":
