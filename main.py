@@ -55,6 +55,7 @@ def pale_help():
 		".backup [database] <file> - create a database backup\n"
 		".restore [database] <file> - restore a database from a backup file\n"
 		".save <file> - save the current database to a file\n"
+		".clone <file> - clone the current database to a new file\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
@@ -976,6 +977,30 @@ def main():
 					backup_database(con, cursor, "main", values[0], protected)
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Save error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".clone":
+				try:
+					if con is None:
+						raise ValueError("No database opened")
+					lexer = shlex.shlex(argument, posix=True)
+					lexer.whitespace_split = True
+					lexer.commenters = ""
+					lexer.escape = ""
+					values = list(lexer)
+					if len(values) != 1 or not values[0]:
+						raise ValueError("Usage: .clone <file>")
+					protected = [active[0] for active in scripts]
+					for seq, name, file in get_databases(cursor):
+						if file:
+							protected.append(Path(file).resolve())
+					for handle in (output_file, once_file):
+						if handle:
+							protected.append(Path(handle.name).resolve())
+					backup_database(con, cursor, "main", values[0], protected)
+				except (OSError, ValueError, sqlite3.Error) as error:
+					print(f"Clone error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
