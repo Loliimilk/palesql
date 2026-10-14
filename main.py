@@ -67,6 +67,7 @@ def pale_help():
 		".changes on|off - show changed row counts after INSERT/UPDATE/DELETE\n"
 		".timeout <milliseconds> - set the SQLite busy timeout\n"
 		".bail on|off - stop .read scripts after the first error\n"
+		".echo on|off - show lines executed from .read scripts\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -782,6 +783,7 @@ def main():
 	nullvalue = ""
 	changes = False
 	bail = False
+	echo = False
 	column_separator = None
 	row_separator = None
 	column_widths = ()
@@ -843,6 +845,8 @@ def main():
 						scripts[-1] = (scripts[-1][0], scripts[-1][1], line_number)
 						source_context = (scripts[-1][0], line_number)
 						inp = inp.rstrip("\r\n")
+						if echo:
+							print(inp)
 					except StopIteration:
 						path, lines, last_line = scripts.pop()
 						if sql_context(sql)[1] or sql_context(sql)[0] == "/*":
@@ -1165,6 +1169,13 @@ def main():
 					print("Usage: .bail on|off", file=sys.stderr if output_file else sys.stdout)
 					continue
 				bail = argument.lower() == "on"
+				continue
+
+			if command == ".echo":
+				if argument.lower() not in ("on", "off"):
+					print("Usage: .echo on|off", file=sys.stderr if output_file else sys.stdout)
+					continue
+				echo = argument.lower() == "on"
 				continue
 
 			if command == ".clear":
