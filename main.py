@@ -52,6 +52,7 @@ def pale_help():
 		".schema [pattern] - show schema, optionally filtered by name/pattern\n"
 		".fullschema - show full schema and statistics\n"
 		".dump [objects] - output SQL to restore tables, data, indexes, triggers, and views\n"
+		".backup [database] <file> - create a database backup\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
@@ -502,6 +503,29 @@ def pale_dump(cursor, object_names=()):
 		print(sql.rstrip().rstrip(";") + ";")
 	print("COMMIT;")
 
+def parse_backup_arguments(argument):
+	lexer = shlex.shlex(argument, posix=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	lexer.escape = ""
+	values = list(lexer)
+	if len(values) not in (1, 2) or not values[-1]:
+		raise ValueError("Usage: .backup [database] <file>")
+	return ("main", values[0]) if len(values) == 1 else tuple(values)
+
+def backup_database(con, cursor, database_name, filename, protected=()):
+	database = next((row[1] for row in get_databases(cursor) if identifier_key(row[1]) == identifier_key(database_name)), None)
+	if database is None:
+		raise ValueError(f"database not found: {database_name}")
+	path = Path(filename).expanduser().resolve()
+	if any(path == item or (path.exists() and item.exists() and path.samefile(item)) for item in protected):
+		raise ValueError("Backup file must not overwrite an open database or active script")
+	destination = sqlite3.connect(str(path))
+	try:
+		con.backup(destination, name=database)
+	finally:
+		destination.close()
+
 
 def schema_sql(database, kind, name, sql):
 	# Qualify the declared object, leaving its body and string literals intact.
@@ -872,6 +896,24 @@ def main():
 					pale_dump(cursor, list(lexer))
 				except (ValueError, OSError, sqlite3.Error) as error:
 					print(f"Dump error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".backup":
+				try:
+					if con is None:
+						raise ValueError("No database opened")
+					database_name, filename = parse_backup_arguments(argument)
+					protected = [active[0] for active in scripts]
+					for seq, name, file in get_databases(cursor):
+						if file:
+							protected.extend(Path(file + suffix).resolve() for suffix in ("", "-wal", "-shm", "-journal"))
+					for handle in (output_file, once_file):
+						if handle:
+							protected.append(Path(handle.name).resolve())
+					backup_database(con, cursor, database_name, filename, protected)
+				except (OSError, ValueError, sqlite3.Error) as error:
+					print(f"Backup error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
