@@ -68,6 +68,7 @@ def pale_help():
 		".timeout <milliseconds> - set the SQLite busy timeout\n"
 		".bail on|off - stop .read scripts after the first error\n"
 		".echo on|off - show lines executed from .read scripts\n"
+		".parameter init|set|unset|list|clear - manage SQL parameter bindings\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -405,9 +406,12 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 		for row in rows:
 			emit(separator.join(format_value(value) for value in row))
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None):
 	try:
-		cursor.execute(sql)
+		if parameters:
+			cursor.execute(sql, parameters)
+		else:
+			cursor.execute(sql)
 
 		if cursor.description:
 			names = [column[0] for column in cursor.description]
@@ -421,6 +425,23 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 		location = f"{error_context[0]}:{error_context[1]}: " if error_context else ""
 		print(f"SQL error: {location}{error}", file=sys.stderr)
 		return False
+
+def parameter_name(name):
+	if not name or name[0] not in ":$@?":
+		raise ValueError("parameter name must start with :, $, @, or ?")
+	name = name[1:]
+	if not name:
+		raise ValueError("parameter name cannot be empty")
+	return name
+
+def parameter_value(value):
+	if value.lower() == "null":
+		return None
+	if re.fullmatch(r"[+-]?\d+", value):
+		return int(value)
+	if re.fullmatch(r"[+-]?(?:\d+\.\d*|\d*\.\d+)(?:[eE][+-]?\d+)?|[+-]?\d+[eE][+-]?\d+", value):
+		return float(value)
+	return value
 
 def parse_import_arguments(argument):
 	lexer = shlex.shlex(argument, posix=True)
@@ -784,6 +805,7 @@ def main():
 	changes = False
 	bail = False
 	echo = False
+	parameters = {}
 	column_separator = None
 	row_separator = None
 	column_widths = ()
@@ -815,7 +837,7 @@ def main():
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
 				with redirect_stdout(once_file if once_file is not None else sys.stdout):
-					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context)
+					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters)
 				if not success:
 					failed = True
 					if bail and scripts:
@@ -1176,6 +1198,36 @@ def main():
 					print("Usage: .echo on|off", file=sys.stderr if output_file else sys.stdout)
 					continue
 				echo = argument.lower() == "on"
+				continue
+
+			if command == ".parameter":
+				try:
+					lexer = shlex.shlex(argument, posix=True)
+					lexer.whitespace_split = True
+					lexer.commenters = ""
+					lexer.escape = ""
+					values = list(lexer)
+					if not values:
+						raise ValueError("Usage: .parameter init|set|unset|list|clear")
+					action = values[0].lower()
+					if action == "init" and len(values) == 1:
+						continue
+					if action == "clear" and len(values) == 1:
+						parameters.clear()
+						continue
+					if action == "list" and len(values) == 1:
+						for name, value in parameters.items():
+							print(f"{name} = {sql_literal(value)}")
+						continue
+					if action == "set" and len(values) == 3:
+						parameters[parameter_name(values[1])] = parameter_value(values[2])
+						continue
+					if action == "unset" and len(values) == 2:
+						parameters.pop(parameter_name(values[1]), None)
+						continue
+					raise ValueError("Usage: .parameter init|set|unset|list|clear")
+				except ValueError as error:
+					print(error, file=sys.stderr if output_file else sys.stdout)
 				continue
 
 			if command == ".clear":
