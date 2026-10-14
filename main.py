@@ -13,10 +13,24 @@ from pathlib import Path
 from contextlib import redirect_stdout
 
 
-PALESQL_VERSION = "0.4.0"
+PALESQL_VERSION = "0.5.0"
 PYTHON_VERSION = sys.version.split()[0]
 SQLITE_LIBRARY_VERSION = sqlite3.sqlite_version
 OUTPUT_MODES = ("list", "column", "table", "box", "csv", "tabs", "json", "jsonpretty", "line", "markdown", "quote")
+SQLITE_LIMITS = {
+	"length": sqlite3.SQLITE_LIMIT_LENGTH,
+	"sql_length": sqlite3.SQLITE_LIMIT_SQL_LENGTH,
+	"column": sqlite3.SQLITE_LIMIT_COLUMN,
+	"expr_depth": sqlite3.SQLITE_LIMIT_EXPR_DEPTH,
+	"compound_select": sqlite3.SQLITE_LIMIT_COMPOUND_SELECT,
+	"vdbe_op": sqlite3.SQLITE_LIMIT_VDBE_OP,
+	"function_arg": sqlite3.SQLITE_LIMIT_FUNCTION_ARG,
+	"attached": sqlite3.SQLITE_LIMIT_ATTACHED,
+	"like_pattern_length": sqlite3.SQLITE_LIMIT_LIKE_PATTERN_LENGTH,
+	"variable_number": sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER,
+	"trigger_depth": sqlite3.SQLITE_LIMIT_TRIGGER_DEPTH,
+	"worker_threads": sqlite3.SQLITE_LIMIT_WORKER_THREADS,
+}
 
 
 def pale_open(name):
@@ -69,6 +83,7 @@ def pale_help():
 		".bail on|off - stop .read scripts after the first error\n"
 		".echo on|off - show lines executed from .read scripts\n"
 		".parameter init|set|unset|list|clear - manage SQL parameter bindings\n"
+		".limit [name] [value] - view or change SQLite runtime limits\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -442,6 +457,14 @@ def parameter_value(value):
 	if re.fullmatch(r"[+-]?(?:\d+\.\d*|\d*\.\d+)(?:[eE][+-]?\d+)?|[+-]?\d+[eE][+-]?\d+", value):
 		return float(value)
 	return value
+
+def limit_name(name):
+	name = name.lower().replace("-", "_")
+	if name.startswith("sqlite_limit_"):
+		name = name[13:]
+	if name not in SQLITE_LIMITS:
+		raise ValueError("unknown SQLite limit: " + name)
+	return name
 
 def parse_import_arguments(argument):
 	lexer = shlex.shlex(argument, posix=True)
@@ -1228,6 +1251,38 @@ def main():
 					raise ValueError("Usage: .parameter init|set|unset|list|clear")
 				except ValueError as error:
 					print(error, file=sys.stderr if output_file else sys.stdout)
+				continue
+
+			if command == ".limit":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					lexer = shlex.shlex(argument, posix=True)
+					lexer.whitespace_split = True
+					lexer.commenters = ""
+					lexer.escape = ""
+					values = list(lexer)
+					if len(values) > 2:
+						raise ValueError("Usage: .limit [name] [value]")
+					if not values:
+						for name, category in SQLITE_LIMITS.items():
+							print(f"{name} {con.getlimit(category)}")
+						continue
+					name = limit_name(values[0])
+					category = SQLITE_LIMITS[name]
+					if len(values) == 1:
+						print(f"{name} {con.getlimit(category)}")
+						continue
+					value = int(values[1])
+					if value < 0 or re.fullmatch(r"[0-9]+", values[1]) is None:
+						raise ValueError("limit value must be a non-negative integer")
+					con.setlimit(category, value)
+					print(f"{name} {con.getlimit(category)}")
+				except (ValueError, sqlite3.Error, AttributeError) as error:
+					print(f"Limit error: {error}", file=sys.stderr)
+					failed = True
 				continue
 
 			if command == ".clear":
