@@ -53,6 +53,7 @@ def pale_help():
 		".fullschema - show full schema and statistics\n"
 		".dump [objects] - output SQL to restore tables, data, indexes, triggers, and views\n"
 		".backup [database] <file> - create a database backup\n"
+		".restore [database] <file> - restore a database from a backup file\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
@@ -526,6 +527,31 @@ def backup_database(con, cursor, database_name, filename, protected=()):
 	finally:
 		destination.close()
 
+def restore_database(con, cursor, database_name, filename):
+	path = Path(filename).expanduser().resolve()
+	if not path.is_file():
+		raise OSError(f"file not found: {path}")
+	databases = get_databases(cursor)
+	database = next((row for row in databases if identifier_key(row[1]) == identifier_key(database_name)), None)
+	if database is None:
+		raise ValueError(f"database not found: {database_name}")
+	if database[2] and path == Path(database[2]).resolve():
+		raise ValueError("Restore file must differ from the destination database")
+	source = sqlite3.connect(str(path))
+	try:
+		if database[1] == "main":
+			source.backup(con, name="main")
+		else:
+			con.execute(f"DETACH DATABASE {quote_name(database[1])}")
+			destination = sqlite3.connect(database[2])
+			try:
+				source.backup(destination, name="main")
+			finally:
+				destination.close()
+			con.execute(f"ATTACH DATABASE ? AS {quote_name(database[1])}", (database[2],))
+	finally:
+		source.close()
+
 
 def schema_sql(database, kind, name, sql):
 	# Qualify the declared object, leaving its body and string literals intact.
@@ -914,6 +940,17 @@ def main():
 					backup_database(con, cursor, database_name, filename, protected)
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Backup error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".restore":
+				try:
+					if con is None:
+						raise ValueError("No database opened")
+					database_name, filename = parse_backup_arguments(argument)
+					restore_database(con, cursor, database_name, filename)
+				except (OSError, ValueError, sqlite3.Error) as error:
+					print(f"Restore error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
