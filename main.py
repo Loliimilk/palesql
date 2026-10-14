@@ -9,6 +9,7 @@ import unicodedata
 import shutil
 import shlex
 from pathlib import Path
+from contextlib import redirect_stdout
 
 
 PALESQL_VERSION = "0.3.0"
@@ -31,6 +32,7 @@ def pale_help():
 	print(
 		".help - show commands\n"
 		".read <file.sql> - run UTF-8 SQL/dot commands; nested paths are relative to the script\n"
+		".output [file] - write normal output to a UTF-8 file (overwrites); no file restores stdout\n"
 		".print <text> - print literal text (no argument prints a blank line)\n"
 		".prompt <main> <continue> - set prompts; quote text containing spaces\n"
 		".open <database> - open or create database\n"
@@ -615,6 +617,8 @@ def main():
 	continue_prompt = "    ...: "
 	failed = False
 	scripts = []
+	console = sys.stdout
+	output_file = None
 
 	def run_sql(buffer):
 		nonlocal failed
@@ -642,7 +646,8 @@ def main():
 						sql = ""
 						continue
 				else:
-					inp = input((continue_prompt if sql else main_prompt) if interactive else "")
+					with redirect_stdout(console):
+						inp = input((continue_prompt if sql else main_prompt) if interactive else "")
 			except EOFError:
 				if sql_context(sql)[1] or sql_context(sql)[0] == "/*":
 					print("SQL error: incomplete statement at end of input", file=sys.stderr)
@@ -669,6 +674,41 @@ def main():
 			argument = parts[1] if len(parts) == 2 else ""
 			command = command.lower()
 			argument = argument.strip()
+
+			if command == ".output":
+				try:
+					if argument:
+						if argument[0] in ("'", '"'):
+							lexer = shlex.shlex(argument, posix=True)
+							lexer.whitespace_split = True
+							lexer.commenters = ""
+							lexer.escape = ""
+							paths = list(lexer)
+							if len(paths) != 1 or not paths[0]:
+								raise ValueError("Usage: .output [file]")
+							argument = paths[0]
+						path = Path(argument).expanduser().resolve()
+						protected = [active[0] for active in scripts]
+						if con is not None:
+							for seq, name, file in get_databases(cursor):
+								if file:
+									protected.extend(Path(file + suffix).resolve() for suffix in ("", "-wal", "-shm", "-journal"))
+						if any(path == item or (path.exists() and item.exists() and path.samefile(item)) for item in protected):
+							raise ValueError("Output file must not overwrite an open database or active script")
+						if output_file and Path(output_file.name).resolve() == path:
+							output_file.flush()
+							continue
+						new_output = path.open("w", encoding="utf-8", newline="\r\n" if crlf else "\n")
+					else:
+						new_output = None
+					if output_file:
+						output_file.close()
+					output_file = new_output
+					sys.stdout = output_file if output_file is not None else console
+				except (OSError, ValueError) as error:
+					print(f"Output error: {error}", file=sys.stderr)
+					failed = True
+				continue
 
 			if command == ".read":
 				try:
@@ -717,16 +757,18 @@ def main():
 					if len(prompts) != 2:
 						raise ValueError
 				except ValueError:
-					print('Usage: .prompt <main> <continue> (example: .prompt "sql> " "...> ")')
+					print('Usage: .prompt <main> <continue> (example: .prompt "sql> " "...> ")', file=sys.stderr if output_file else sys.stdout)
 					continue
 				main_prompt, continue_prompt = prompts
 				continue
 
 			if command == ".crlf":
 				if argument.lower() not in ("on", "off"):
-					print("Usage: .crlf on|off")
+					print("Usage: .crlf on|off", file=sys.stderr if output_file else sys.stdout)
 					continue
 				crlf = argument.lower() == "on"
+				if output_file:
+					output_file.reconfigure(newline="\r\n" if crlf else "\n")
 				continue
 
 			if command == ".width":
@@ -735,7 +777,7 @@ def main():
 					if not widths or any(width < 0 for width in widths):
 						raise ValueError
 				except ValueError:
-					print("Usage: .width <n1> <n2> ... (non-negative integers; 0 = auto)")
+					print("Usage: .width <n1> <n2> ... (non-negative integers; 0 = auto)", file=sys.stderr if output_file else sys.stdout)
 					continue
 				column_widths = widths
 				continue
@@ -744,7 +786,7 @@ def main():
 				try:
 					separators = parse_separators(argument)
 				except ValueError as error:
-					print(error)
+					print(error, file=sys.stderr if output_file else sys.stdout)
 					continue
 				column_separator = separators[0]
 				if len(separators) == 2:
@@ -753,7 +795,7 @@ def main():
 
 			if command == ".nullvalue":
 				if not argument:
-					print('Usage: .nullvalue <text> (use "" for empty text)')
+					print('Usage: .nullvalue <text> (use "" for empty text)', file=sys.stderr if output_file else sys.stdout)
 					continue
 				if len(argument) >= 2 and argument[0] in ("\"", "'") and argument[-1] == argument[0]:
 					argument = argument[1:-1]
@@ -762,7 +804,7 @@ def main():
 
 			if command == ".mode":
 				if argument.lower() not in OUTPUT_MODES:
-					print("Usage: .mode " + "|".join(OUTPUT_MODES))
+					print("Usage: .mode " + "|".join(OUTPUT_MODES), file=sys.stderr if output_file else sys.stdout)
 					continue
 				mode = argument.lower()
 				column_separator = None
@@ -771,7 +813,7 @@ def main():
 
 			if command == ".headers":
 				if argument.lower() not in ("on", "off"):
-					print("Usage: .headers on|off")
+					print("Usage: .headers on|off", file=sys.stderr if output_file else sys.stdout)
 					continue
 
 				headers = argument.lower() == "on"
@@ -787,7 +829,7 @@ def main():
 
 			if command == ".open":
 				if not argument:
-					print("No name of database")
+					print("No name of database", file=sys.stderr if output_file else sys.stdout)
 					continue
 
 				if con is not None:
@@ -797,14 +839,14 @@ def main():
 					con, cursor = pale_open(argument)
 
 				except sqlite3.Error as error:
-					print("Database error:", error)
+					print("Database error:", error, file=sys.stderr if output_file else sys.stdout)
 					con = None
 					cursor = None
 					continue
 
 				sql = ""
 				if interactive:
-					print("Database opened")
+					print("Database opened", file=console)
 				continue
 
 			if con is None:
@@ -814,7 +856,7 @@ def main():
 					scripts.clear()
 					sql = ""
 				else:
-					print("No database opened")
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
 				continue
 
 			# DB is opened
@@ -873,7 +915,7 @@ def main():
 
 			if command == ".columns":
 				if not argument:
-					print("No table name provided")
+					print("No table name provided", file=sys.stderr if output_file else sys.stdout)
 					continue
 
 				pale_columns(cursor, argument)
@@ -881,7 +923,7 @@ def main():
 
 			if command == ".foreignkeys":
 				if not argument:
-					print("No table name provided")
+					print("No table name provided", file=sys.stderr if output_file else sys.stdout)
 					continue
 
 				pale_foreignkeys(cursor, argument)
@@ -894,7 +936,7 @@ def main():
 				sql = ""
 
 				if interactive:
-					print("Database closed")
+					print("Database closed", file=console)
 				continue
 
 			if command == ".database":
@@ -910,7 +952,7 @@ def main():
 				continue
 
 			if command.startswith("."):
-				print(f"Unknown command: {command}")
+				print(f"Unknown command: {command}", file=sys.stderr if output_file else sys.stdout)
 				continue
 
 			sql += raw_input + "\n"
@@ -918,6 +960,9 @@ def main():
 			sql = run_sql(sql)
 
 	finally:
+		sys.stdout = console
+		if output_file:
+			output_file.close()
 		if con is not None:
 			con.close()
 	return 1 if failed else 0
