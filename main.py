@@ -51,6 +51,7 @@ def pale_help():
 		".foreignkeys <table> - show table foreign keys\n"
 		".schema [pattern] - show schema, optionally filtered by name/pattern\n"
 		".fullschema - show full schema and statistics\n"
+		".dump [objects] - output SQL to restore tables, data, indexes, triggers, and views\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
@@ -466,6 +467,41 @@ def schema_rows(cursor, pattern="%"):
 	order = {"table": 0, "index": 1, "view": 2, "trigger": 3}
 	return sorted(rows, key=lambda row: (order[row[1]], row[0], row[2]))
 
+def pale_dump(cursor, object_names=()):
+	objects = [row for row in database_objects(cursor) if row[0] == "main" and not row[2].startswith("sqlite_")]
+	shadows = shadow_tables(cursor)
+	objects = [row for row in objects if (row[0], row[2]) not in shadows]
+	if object_names:
+		wanted = {identifier_key(name) for name in object_names}
+		objects = [row for row in objects if identifier_key(row[2]) in wanted or identifier_key(row[3]) in wanted]
+	if not objects:
+		print("No objects found", file=sys.stderr if not sys.stdout.isatty() else sys.stdout)
+		return
+
+	tables = [row for row in objects if row[1] == "table" and row[4]]
+	indexes = [row for row in objects if row[1] == "index" and row[4]]
+	triggers = [row for row in objects if row[1] == "trigger" and row[4]]
+	views = [row for row in objects if row[1] == "view" and row[4]]
+	print("BEGIN TRANSACTION;")
+	for database, kind, name, table, sql in sorted(tables, key=lambda row: row[2]):
+		print(sql.rstrip().rstrip(";") + ";")
+	for database, kind, name, table, sql in sorted(tables, key=lambda row: row[2]):
+		columns = [row[1] for row in table_pragma(cursor, database, "table_xinfo", name) if row[6] == 0]
+		if not columns:
+			continue
+		column_sql = ", ".join(quote_name(column) for column in columns)
+		cursor.execute(f"SELECT {column_sql} FROM {quote_name(name)}")
+		for values in cursor.fetchall():
+			literals = ", ".join(sql_literal(value) for value in values)
+			print(f"INSERT INTO {quote_name(name)} ({column_sql}) VALUES ({literals});")
+	for database, kind, name, table, sql in sorted(indexes, key=lambda row: row[2]):
+		print(sql.rstrip().rstrip(";") + ";")
+	for database, kind, name, table, sql in sorted(triggers, key=lambda row: row[2]):
+		print(sql.rstrip().rstrip(";") + ";")
+	for database, kind, name, table, sql in sorted(views, key=lambda row: row[2]):
+		print(sql.rstrip().rstrip(";") + ";")
+	print("COMMIT;")
+
 
 def schema_sql(database, kind, name, sql):
 	# Qualify the declared object, leaving its body and string literals intact.
@@ -822,6 +858,20 @@ def main():
 					sql = ""
 				except (OSError, UnicodeError, ValueError) as error:
 					print(f"Read error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".dump":
+				try:
+					if con is None:
+						raise ValueError("No database opened")
+					lexer = shlex.shlex(argument, posix=True)
+					lexer.whitespace_split = True
+					lexer.commenters = ""
+					lexer.escape = ""
+					pale_dump(cursor, list(lexer))
+				except (ValueError, OSError, sqlite3.Error) as error:
+					print(f"Dump error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
