@@ -33,6 +33,7 @@ def pale_help():
 		".help - show commands\n"
 		".read <file.sql> - run UTF-8 SQL/dot commands; nested paths are relative to the script\n"
 		".output [file] - write normal output to a UTF-8 file (overwrites); no file restores stdout\n"
+		".once <file> - write the next SQL result to a file, then restore stdout\n"
 		".print <text> - print literal text (no argument prints a blank line)\n"
 		".prompt <main> <continue> - set prompts; quote text containing spaces\n"
 		".open <database> - open or create database\n"
@@ -619,15 +620,25 @@ def main():
 	scripts = []
 	console = sys.stdout
 	output_file = None
+	once_file = None
 
 	def run_sql(buffer):
-		nonlocal failed
+		nonlocal failed, once_file, output_file
 		start = 0
 		for index, char in enumerate(buffer):
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
-				if not execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf):
+				with redirect_stdout(once_file if once_file is not None else sys.stdout):
+					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf)
+				if not success:
 					failed = True
+				if once_file and (not success or cursor.description is not None):
+					once_file.close()
+					once_file = None
+					if output_file:
+						output_file.close()
+						output_file = None
+					sys.stdout = console
 				start = index + 1
 		remaining = buffer[start:]
 		return remaining if sql_context(remaining)[1] or sql_context(remaining)[0] == "/*" else ""
@@ -675,8 +686,10 @@ def main():
 			command = command.lower()
 			argument = argument.strip()
 
-			if command == ".output":
+			if command in (".output", ".once"):
 				try:
+					if command == ".once" and not argument:
+						raise ValueError("Usage: .once <file>")
 					if argument:
 						if argument[0] in ("'", '"'):
 							lexer = shlex.shlex(argument, posix=True)
@@ -695,12 +708,23 @@ def main():
 									protected.extend(Path(file + suffix).resolve() for suffix in ("", "-wal", "-shm", "-journal"))
 						if any(path == item or (path.exists() and item.exists() and path.samefile(item)) for item in protected):
 							raise ValueError("Output file must not overwrite an open database or active script")
-						if output_file and Path(output_file.name).resolve() == path:
+						if command == ".output" and output_file and Path(output_file.name).resolve() == path:
 							output_file.flush()
+							if once_file:
+								once_file.close()
+								once_file = None
 							continue
+						if any(handle and (Path(handle.name).resolve() == path or (path.exists() and path.samefile(handle.name))) for handle in (output_file, once_file)):
+							raise ValueError("File is already used by .output or .once; choose another file")
 						new_output = path.open("w", encoding="utf-8", newline="\r\n" if crlf else "\n")
 					else:
 						new_output = None
+					if once_file:
+						once_file.close()
+						once_file = None
+					if command == ".once":
+						once_file = new_output
+						continue
 					if output_file:
 						output_file.close()
 					output_file = new_output
@@ -769,6 +793,8 @@ def main():
 				crlf = argument.lower() == "on"
 				if output_file:
 					output_file.reconfigure(newline="\r\n" if crlf else "\n")
+				if once_file:
+					once_file.reconfigure(newline="\r\n" if crlf else "\n")
 				continue
 
 			if command == ".width":
@@ -961,6 +987,8 @@ def main():
 
 	finally:
 		sys.stdout = console
+		if once_file:
+			once_file.close()
 		if output_file:
 			output_file.close()
 		if con is not None:
