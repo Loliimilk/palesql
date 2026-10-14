@@ -56,6 +56,7 @@ def pale_help():
 		".restore [database] <file> - restore a database from a backup file\n"
 		".save <file> - save the current database to a file\n"
 		".clone <file> - clone the current database to a new file\n"
+		".excel - use spreadsheet-friendly CSV output with headers\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
@@ -1002,6 +1003,16 @@ def main():
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Clone error: {error}", file=sys.stderr)
 					failed = True
+				continue
+
+			if command == ".excel":
+				if argument:
+					print("Usage: .excel", file=sys.stderr if output_file else sys.stdout)
+					continue
+				mode = "csv"
+				headers = True
+				column_separator = None
+				row_separator = None
 				continue
 
 			if command == ".help":
