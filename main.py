@@ -66,6 +66,7 @@ def pale_help():
 		".headers on|off - show or hide column names in SQL results\n"
 		".changes on|off - show changed row counts after INSERT/UPDATE/DELETE\n"
 		".timeout <milliseconds> - set the SQLite busy timeout\n"
+		".bail on|off - stop .read scripts after the first error\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -403,7 +404,7 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 		for row in rows:
 			emit(separator.join(format_value(value) for value in row))
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None):
 	try:
 		cursor.execute(sql)
 
@@ -416,7 +417,8 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 		return True
 
 	except sqlite3.Error as error:
-		print("SQL error:", error, file=sys.stderr)
+		location = f"{error_context[0]}:{error_context[1]}: " if error_context else ""
+		print(f"SQL error: {location}{error}", file=sys.stderr)
 		return False
 
 def parse_import_arguments(argument):
@@ -779,6 +781,7 @@ def main():
 	mode = "list"
 	nullvalue = ""
 	changes = False
+	bail = False
 	column_separator = None
 	row_separator = None
 	column_widths = ()
@@ -787,6 +790,7 @@ def main():
 	continue_prompt = "    ...: "
 	failed = False
 	scripts = []
+	source_context = None
 	console = sys.stdout
 	output_file = None
 	once_file = None
@@ -809,9 +813,12 @@ def main():
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
 				with redirect_stdout(once_file if once_file is not None else sys.stdout):
-					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes)
+					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context)
 				if not success:
 					failed = True
+					if bail and scripts:
+						scripts.clear()
+						return ""
 				if once_file and (not success or cursor.description is not None):
 					once_file.close()
 					once_file = None
@@ -825,18 +832,26 @@ def main():
 
 	try:
 		while True:
+			if bail and failed and scripts:
+				scripts.clear()
+				sql = ""
 			try:
 				if scripts:
 					try:
-						inp = next(scripts[-1][1]).rstrip("\r\n")
+						source_context = (scripts[-1][0], 0)
+						line_number, inp = next(scripts[-1][1])
+						scripts[-1] = (scripts[-1][0], scripts[-1][1], line_number)
+						source_context = (scripts[-1][0], line_number)
+						inp = inp.rstrip("\r\n")
 					except StopIteration:
-						path, lines = scripts.pop()
+						path, lines, last_line = scripts.pop()
 						if sql_context(sql)[1] or sql_context(sql)[0] == "/*":
-							print(f"SQL error: incomplete statement at end of {path}", file=sys.stderr)
+							print(f"SQL error: {path}:{last_line}: incomplete statement", file=sys.stderr)
 							failed = True
 						sql = ""
 						continue
 				else:
+					source_context = None
 					with redirect_stdout(console):
 						inp = input((continue_prompt if sql else main_prompt) if interactive else "")
 			except EOFError:
@@ -950,7 +965,7 @@ def main():
 					if any(path == active[0] for active in scripts) or len(scripts) >= 32:
 						raise ValueError("Recursive .read or nesting limit exceeded")
 					text = path.read_text(encoding="utf-8-sig")
-					scripts.append((path, iter(io.StringIO(text))))
+					scripts.append((path, iter(enumerate(io.StringIO(text), 1)), 0))
 					sql = ""
 				except (OSError, UnicodeError, ValueError) as error:
 					print(f"Read error: {error}", file=sys.stderr)
@@ -1143,6 +1158,13 @@ def main():
 				except sqlite3.Error as error:
 					print(f"Timeout error: {error}", file=sys.stderr)
 					failed = True
+				continue
+
+			if command == ".bail":
+				if argument.lower() not in ("on", "off"):
+					print("Usage: .bail on|off", file=sys.stderr if output_file else sys.stdout)
+					continue
+				bail = argument.lower() == "on"
 				continue
 
 			if command == ".clear":
