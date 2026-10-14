@@ -808,9 +808,13 @@ def main():
 				continue
 
 			if con is None:
-				print("No database opened", file=sys.stderr if scripts else sys.stdout)
 				if scripts:
+					print(f"Read error: no database opened; stopped {scripts[-1][0]}. Use .open <database> before .read.", file=sys.stderr)
 					failed = True
+					scripts.clear()
+					sql = ""
+				else:
+					print("No database opened")
 				continue
 
 			# DB is opened
