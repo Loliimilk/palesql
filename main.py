@@ -8,6 +8,7 @@ import math
 import unicodedata
 import shutil
 import shlex
+import csv
 from pathlib import Path
 from contextlib import redirect_stdout
 
@@ -34,6 +35,7 @@ def pale_help():
 		".read <file.sql> - run UTF-8 SQL/dot commands; nested paths are relative to the script\n"
 		".output [file] - write normal output to a UTF-8 file (overwrites); no file restores stdout\n"
 		".once <file> - write the next SQL result to a file, then restore stdout\n"
+		".import <file> <table> - import CSV/TSV or separated data into a table\n"
 		".print <text> - print literal text (no argument prints a blank line)\n"
 		".prompt <main> <continue> - set prompts; quote text containing spaces\n"
 		".open <database> - open or create database\n"
@@ -406,6 +408,52 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 		print("SQL error:", error, file=sys.stderr)
 		return False
 
+def parse_import_arguments(argument):
+	lexer = shlex.shlex(argument, posix=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	lexer.escape = ""
+	values = list(lexer)
+	if len(values) != 2:
+		raise ValueError("Usage: .import <file> <table>")
+	return values
+
+def import_file(cursor, filename, table_name, nullvalue="", column_separator=None):
+	path = Path(filename).expanduser().resolve()
+	if not path.is_file():
+		raise OSError(f"file not found: {path}")
+	database, name = find_table(cursor, table_name) or (None, None)
+	if database is None or name is None:
+		raise ValueError(f"table not found: {table_name}")
+	if database == "temp":
+		qualified = quote_name(name)
+	else:
+		qualified = f"{quote_name(database)}.{quote_name(name)}"
+	columns = [row[1] for row in table_pragma(cursor, database, "table_xinfo", name) if row[6] == 0]
+	if not columns:
+		raise ValueError(f"table has no writable columns: {table_name}")
+	delimiter = column_separator if column_separator is not None else "\t" if path.suffix.lower() in (".tsv", ".tab") else ","
+	if len(delimiter) != 1:
+		raise ValueError("import separator must be one character; use .separator for CSV/TSV output only")
+	with path.open("r", encoding="utf-8-sig", newline="") as source:
+		reader = csv.reader(source, delimiter=delimiter)
+		rows = list(reader)
+	if not rows:
+		return 0
+	if any(len(row) != len(columns) for row in rows):
+		bad = next(row for row in rows if len(row) != len(columns))
+		raise ValueError(f"expected {len(columns)} columns, got {len(bad)}")
+	placeholders = ", ".join("?" for column in columns)
+	column_sql = ", ".join(quote_name(column) for column in columns)
+	cursor.execute("BEGIN")
+	try:
+		cursor.executemany(f"INSERT INTO {qualified} ({column_sql}) VALUES ({placeholders})", [[None if nullvalue and value == nullvalue else value for value in row] for row in rows])
+		cursor.execute("COMMIT")
+	except Exception:
+		cursor.execute("ROLLBACK")
+		raise
+	return len(rows)
+
 def schema_rows(cursor, pattern="%"):
 	rows = []
 	shadows = shadow_tables(cursor)
@@ -731,6 +779,20 @@ def main():
 					sys.stdout = output_file if output_file is not None else console
 				except (OSError, ValueError) as error:
 					print(f"Output error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".import":
+				try:
+					if con is None:
+						raise ValueError("No database opened")
+					filename, table_name = parse_import_arguments(argument)
+					path = Path(filename).expanduser()
+					if not path.is_absolute() and scripts:
+						path = scripts[-1][0].parent / path
+					import_file(cursor, path, table_name, nullvalue, column_separator)
+				except (OSError, UnicodeError, ValueError, csv.Error, sqlite3.Error) as error:
+					print(f"Import error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
