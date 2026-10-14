@@ -10,7 +10,7 @@ import shutil
 import shlex
 
 
-PALESQL_VERSION = "0.2.0"
+PALESQL_VERSION = "0.3.0"
 PYTHON_VERSION = sys.version.split()[0]
 SQLITE_LIBRARY_VERSION = sqlite3.sqlite_version
 OUTPUT_MODES = ("list", "column", "table", "box", "csv", "tabs", "json", "jsonpretty", "line", "markdown", "quote")
@@ -223,17 +223,38 @@ def sql_literal(value):
 		return "NULL" if math.isnan(value) else ("-9e999" if value < 0 else "9e999")
 	return str(value)
 
+def text_clusters(text):
+	clusters = []
+	for char in text:
+		code = ord(char)
+		regional = 0x1F1E6 <= code <= 0x1F1FF
+		extend = unicodedata.category(char).startswith("M") or char == "\u200d" or 0x1F3FB <= code <= 0x1F3FF or 0xE0020 <= code <= 0xE007F
+		if clusters and (extend or clusters[-1].endswith("\u200d") or (regional and len(clusters[-1]) == 1 and 0x1F1E6 <= ord(clusters[-1]) <= 0x1F1FF)):
+			clusters[-1] += char
+		else:
+			clusters.append(char)
+	return clusters
+
+
+def cluster_width(cluster):
+	widths = [0 if unicodedata.category(char).startswith("M") or unicodedata.category(char) == "Cf" else 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1 for char in cluster]
+	if "\u200d" in cluster or "\ufe0f" in cluster or "\u20e3" in cluster or any(0x1F1E6 <= ord(char) <= 0x1F1FF for char in cluster):
+		return max(2, max(widths, default=0))
+	return max(widths, default=0)
+
+
 def text_width(text):
-	return sum(0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1 for char in text)
+	return sum(cluster_width(cluster) for cluster in text_clusters(text))
+
 
 def wrap_cell(text, width):
 	lines, line, used = [], "", 0
-	for char in text:
-		size = text_width(char)
+	for cluster in text_clusters(text):
+		size = cluster_width(cluster)
 		if used + size > width and line:
 			lines.append(line)
 			line, used = "", 0
-		line += char
+		line += cluster
 		used += size
 	lines.append(line)
 	return lines
@@ -253,7 +274,7 @@ def print_grid(names, rows, headers, mode, nullvalue="", column_widths=(), newli
 		return
 	data = [[result_text(value, nullvalue).replace("\r", "\\r").replace("\t", "\\t").replace("\x00", "\\0").split("\n") for value in row] for row in data]
 	widths = [max(text_width(line) for row in data for line in row[index]) for index in range(len(names))]
-	minimums = [max(1, max((text_width(char) for row in data for line in row[index] for char in line), default=1)) for index in range(len(names))]
+	minimums = [max(1, max((text_width(char) for row in data for line in row[index] for char in text_clusters(line)), default=1)) for index in range(len(names))]
 	if mode in ("column", "table"):
 		for index, width in enumerate(column_widths[:len(names)]):
 			if width:
@@ -374,9 +395,11 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 			names = [column[0] for column in cursor.description]
 			newline = "\r\n" if crlf and not sys.stdout.isatty() else "\n"
 			print_results(names, cursor.fetchall(), headers, mode, nullvalue, column_separator, row_separator, column_widths, newline)
+		return True
 
 	except sqlite3.Error as error:
-		print("SQL error:", error)
+		print("SQL error:", error, file=sys.stderr)
+		return False
 
 def schema_rows(cursor, pattern="%"):
 	rows = []
@@ -537,12 +560,44 @@ def pale_foreignkeys(cursor, table_name):
 		print(f"{key_id:<5} | {seq:<5} | {table:<20} | {from_column:<20} | {to_column:<20} | {on_update:<12} | {on_delete:<12} | {match}")
 
 
+def sql_context(sql):
+	state, has_sql, index = "", False, 0
+	while index < len(sql):
+		char = sql[index]
+		pair = sql[index:index + 2]
+		if state == "--":
+			if char == "\n":
+				state = ""
+		elif state == "/*":
+			if pair == "*/":
+				state = ""
+				index += 1
+		elif state:
+			if char == state:
+				if state != "]" and pair == state * 2:
+					index += 1
+				else:
+					state = ""
+		elif pair in ("--", "/*"):
+			state = pair
+			index += 1
+		elif char in ("'", '"', "`", "["):
+			state = "]" if char == "[" else char
+			has_sql = True
+		elif not char.isspace() and char != ";":
+			has_sql = True
+		index += 1
+	return state, has_sql
+
+
 def main():
-	print(
-		f"\nhaiiiiiiiiii :3 rawr certified SQL CLI :p\n"
-		f"PaleSQL {PALESQL_VERSION} by Shikaru Software\n"
-		f"Type .help for commands.\n"
-	)
+	interactive = sys.stdin.isatty() and sys.stdout.isatty()
+	if interactive:
+		print(
+			f"\nhaiiiiiiiiii :3 rawr certified SQL CLI :p\n"
+			f"PaleSQL {PALESQL_VERSION} by Shikaru Software\n"
+			f"Type .help for commands.\n"
+		)
 
 	sql = ""
 	con = None
@@ -556,10 +611,26 @@ def main():
 	crlf = False
 	main_prompt = "PaleSQL: "
 	continue_prompt = "    ...: "
+	failed = False
 
 	try:
 		while True:
-			inp = input(continue_prompt if sql else main_prompt)
+			try:
+				inp = input((continue_prompt if sql else main_prompt) if interactive else "")
+			except EOFError:
+				if sql_context(sql)[1] or sql_context(sql)[0] == "/*":
+					print("SQL error: incomplete statement at end of input", file=sys.stderr)
+					return 1
+				break
+			if sql_context(sql)[0] not in ("", "--"):
+				sql += inp + "\n"
+				if sqlite3.complete_statement(sql):
+					if not execute_sql(cursor, sql, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf):
+						failed = True
+					sql = ""
+				continue
+			raw_input = inp
+
 			message = re.fullmatch(r"\.print(?:[ \t](.*))?", inp.lstrip(), re.IGNORECASE)
 			if message:
 				newline = "\r\n" if crlf and not sys.stdout.isatty() else "\n"
@@ -570,7 +641,9 @@ def main():
 			if not inp:
 				continue
 
-			command, _, argument = inp.partition(" ")
+			parts = inp.split(None, 1)
+			command = parts[0]
+			argument = parts[1] if len(parts) == 2 else ""
 			command = command.lower()
 			argument = argument.strip()
 
@@ -678,7 +751,8 @@ def main():
 					continue
 
 				sql = ""
-				print("Database opened")
+				if interactive:
+					print("Database opened")
 				continue
 
 			if con is None:
@@ -761,7 +835,8 @@ def main():
 				cursor = None
 				sql = ""
 
-				print("Database closed")
+				if interactive:
+					print("Database closed")
 				continue
 
 			if command == ".database":
@@ -780,16 +855,18 @@ def main():
 				print(f"Unknown command: {command}")
 				continue
 
-			sql += inp + "\n"
+			sql += raw_input + "\n"
 
 			if sqlite3.complete_statement(sql):
-				execute_sql(cursor, sql, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf)
+				if not execute_sql(cursor, sql, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf):
+					failed = True
 				sql = ""
 
 	finally:
 		if con is not None:
 			con.close()
+	return 1 if failed else 0
 
 
 if __name__ == "__main__":
-	main()
+	sys.exit(main())
