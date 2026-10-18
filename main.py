@@ -122,6 +122,7 @@ def pale_help():
 		".load <file> [entrypoint] - load a SQLite extension\n"
 		".unmodule <name> - remove a virtual-table module\n"
 		".vfsinfo - show SQLite VFS information\n"
+		".vfsname - show the active SQLite VFS name\n"
 		".filectrl <operation> [arguments] - SQLite file-control operation\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
@@ -301,6 +302,14 @@ def pale_vfsinfo(connection, argument=""):
 	if not hasattr(connection, "vfsinfo"):
 		raise ValueError("Python's standard sqlite3 module does not expose SQLite VFS information")
 	raise ValueError("PaleSQL cannot read VFS information on this connection")
+
+
+def pale_vfsname(connection, argument=""):
+	if argument.strip():
+		raise ValueError("Usage: .vfsname")
+	if not hasattr(connection, "vfsname"):
+		raise ValueError("Python's standard sqlite3 module does not expose the active VFS name")
+	raise ValueError("PaleSQL cannot read the active VFS name on this connection")
 
 
 def get_databases(cursor):
@@ -1723,6 +1732,18 @@ def main():
 					pale_vfsinfo(con, argument)
 				except (ValueError, OSError, sqlite3.Error) as error:
 					print(f"VFS info error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".vfsname":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					pale_vfsname(con, argument)
+				except (ValueError, OSError, sqlite3.Error) as error:
+					print(f"VFS name error: {error}", file=sys.stderr)
 					failed = True
 				continue
 

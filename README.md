@@ -104,8 +104,11 @@ reports that limitation instead of claiming the module was removed.
 module does not expose the VFS inspection API, so PaleSQL reports that
 limitation explicitly.
 
+`.vfsname` requests the active VFS name. The standard Python `sqlite3` module
+does not expose that API either, so PaleSQL reports the limitation explicitly.
+
 ## Tests
 
 ```text
-python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding test_load test_filectrl test_unmodule test_vfsinfo
+python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding test_load test_filectrl test_unmodule test_vfsinfo test_vfsname
 ```
