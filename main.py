@@ -443,6 +443,7 @@ def pale_help():
 		".prompt <main> <continue> - set prompts; quote text containing spaces\n"
 		".open <database> - open or create database\n"
 		".cd <directory> - change PaleSQL working directory\n"
+		".pwd - show PaleSQL working directory\n"
 		".shell <command> - execute a command through the system shell\n"
 		".system <command> - alias for .shell (potentially dangerous)\n"
 		".safe on|off - block shell, extension, and file operations\n"
@@ -2715,6 +2716,13 @@ def main():
 				except (OSError, ValueError) as error:
 					print(f"CD error: {error}", file=sys.stderr)
 					failed = True
+				continue
+
+			if command == ".pwd":
+				if argument:
+					print("Usage: .pwd", file=sys.stderr if output_file else sys.stdout)
+					continue
+				print(Path.cwd())
 				continue
 
 			if command in (".shell", ".system"):
