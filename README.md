@@ -92,8 +92,12 @@ sets SQLite's busy timeout on the current connection.
 PaleSQL enables extension loading only during the operation and disables it
 afterward. Relative paths in `.read` scripts resolve from the script directory.
 
+`.filectrl <operation> [arguments]` recognizes SQLite file-control operation
+names, but the standard Python `sqlite3` module does not expose
+`sqlite3_file_control()`, so PaleSQL reports that limitation explicitly.
+
 ## Tests
 
 ```text
-python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding test_load
+python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding test_load test_filectrl
 ```

@@ -39,6 +39,26 @@ SQLITE_DBCONFIGS = {
 	if name.startswith("SQLITE_DBCONFIG_")
 	for value in (getattr(sqlite3, name),)
 }
+SQLITE_FILECTRL_OPERATIONS = (
+	"lockstate",
+	"last_errno",
+	"size_limit",
+	"chunk_size",
+	"file_pointer",
+	"sync_omitted",
+	"win32_av_retry",
+	"persist_wal",
+	"pdb",
+	"begin_atomic_write",
+	"commit_atomic_write",
+	"rollback_atomic_write",
+	"has_mmap",
+	"size_hint",
+	"vfsname",
+	"powersafe_override",
+	"reserve_bytes",
+	"tempfilename",
+)
 
 
 def pale_open(name):
@@ -100,6 +120,7 @@ def pale_help():
 		".journal_mode [mode] - view or change PRAGMA journal_mode\n"
 		".encoding [UTF-8|UTF-16le|UTF-16be] - view or change database encoding\n"
 		".load <file> [entrypoint] - load a SQLite extension\n"
+		".filectrl <operation> [arguments] - SQLite file-control operation\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
 		".scanstats on|off|est - show scan metrics (estimated with Python sqlite3)\n"
@@ -243,6 +264,21 @@ def pale_load_extension(connection, argument, base_path=None):
 	finally:
 		connection.enable_load_extension(False)
 	print(f"Loaded extension: {path}")
+
+
+def pale_filectrl(connection, argument=""):
+	lexer = shlex.shlex(argument, posix=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	values = list(lexer)
+	if not values:
+		raise ValueError("Usage: .filectrl <operation> [arguments]")
+	operation = values[0].lower()
+	if operation not in SQLITE_FILECTRL_OPERATIONS:
+		raise ValueError(f"unknown filectrl operation: {operation}")
+	if not hasattr(connection, "file_control"):
+		raise ValueError("sqlite3_file_control is not exposed by Python's standard sqlite3 module")
+	raise ValueError("PaleSQL cannot call sqlite3_file_control on this connection")
 
 
 def get_databases(cursor):
@@ -1629,6 +1665,18 @@ def main():
 					pale_load_extension(con, argument, base_path)
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Load error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".filectrl":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					pale_filectrl(con, argument)
+				except (ValueError, OSError, sqlite3.Error) as error:
+					print(f"File control error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
