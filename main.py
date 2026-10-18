@@ -5,6 +5,7 @@ import re
 import io
 import json
 import math
+import time
 import unicodedata
 import shutil
 import shlex
@@ -84,6 +85,7 @@ def pale_help():
 		".echo on|off - show lines executed from .read scripts\n"
 		".parameter init|set|unset|list|clear - manage SQL parameter bindings\n"
 		".limit [name] [value] - view or change SQLite runtime limits\n"
+		".timer on|off - show SQL execution time\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -421,7 +423,8 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 		for row in rows:
 			emit(separator.join(format_value(value) for value in row))
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False):
+	started = time.perf_counter()
 	try:
 		if parameters:
 			cursor.execute(sql, parameters)
@@ -434,9 +437,13 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 			print_results(names, cursor.fetchall(), headers, mode, nullvalue, column_separator, row_separator, column_widths, newline)
 		elif changes and cursor.rowcount >= 0:
 			print(f"changes: {cursor.rowcount}")
+		if timer:
+			print(f"Time: {time.perf_counter() - started:.6f} seconds")
 		return True
 
 	except sqlite3.Error as error:
+		if timer:
+			print(f"Time: {time.perf_counter() - started:.6f} seconds")
 		location = f"{error_context[0]}:{error_context[1]}: " if error_context else ""
 		print(f"SQL error: {location}{error}", file=sys.stderr)
 		return False
@@ -829,6 +836,7 @@ def main():
 	bail = False
 	echo = False
 	parameters = {}
+	timer = False
 	column_separator = None
 	row_separator = None
 	column_widths = ()
@@ -860,7 +868,7 @@ def main():
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
 				with redirect_stdout(once_file if once_file is not None else sys.stdout):
-					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters)
+					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer)
 				if not success:
 					failed = True
 					if bail and scripts:
@@ -1283,6 +1291,13 @@ def main():
 				except (ValueError, sqlite3.Error, AttributeError) as error:
 					print(f"Limit error: {error}", file=sys.stderr)
 					failed = True
+				continue
+
+			if command == ".timer":
+				if argument.lower() not in ("on", "off"):
+					print("Usage: .timer on|off", file=sys.stderr if output_file else sys.stdout)
+					continue
+				timer = argument.lower() == "on"
 				continue
 
 			if command == ".clear":
