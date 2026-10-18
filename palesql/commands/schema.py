@@ -347,7 +347,8 @@ def pale_describe(cursor, table_name):
         if hidden:
             flags.append("hidden")
         details = " " + " ".join(flags) if flags else ""
-        print(f"  {column} {column_type or '""'}{details}".rstrip())
+        display_type = column_type or '""'
+        print(f"  {column} {display_type}{details}".rstrip())
     print("Foreign keys:")
     foreign_keys = table_pragma(cursor, database, "foreign_key_list", name)
     if foreign_keys:
