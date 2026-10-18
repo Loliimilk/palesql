@@ -33,6 +33,12 @@ SQLITE_LIMITS = {
 	"trigger_depth": sqlite3.SQLITE_LIMIT_TRIGGER_DEPTH,
 	"worker_threads": sqlite3.SQLITE_LIMIT_WORKER_THREADS,
 }
+SQLITE_DBCONFIGS = {
+	name.removeprefix("SQLITE_DBCONFIG_").lower(): value
+	for name in dir(sqlite3)
+	if name.startswith("SQLITE_DBCONFIG_")
+	for value in (getattr(sqlite3, name),)
+}
 
 
 def pale_open(name):
@@ -88,6 +94,7 @@ def pale_help():
 		".echo on|off - show lines executed from .read scripts\n"
 		".parameter init|set|unset|list|clear - manage SQL parameter bindings\n"
 		".limit [name] [value] - view or change SQLite runtime limits\n"
+		".dbconfig [name] [on|off] - view or change SQLite connection options\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
 		".scanstats on|off|est - show scan metrics (estimated with Python sqlite3)\n"
@@ -119,6 +126,49 @@ def pale_version():
 		f"Python version {PYTHON_VERSION}\n"
 		f"SQLite library version {SQLITE_LIBRARY_VERSION}\n"
 	)
+
+
+def pale_dbconfig(connection, argument=""):
+	if not hasattr(connection, "getconfig") or not hasattr(connection, "setconfig"):
+		raise ValueError("this Python sqlite3 does not expose sqlite3_db_config")
+	lexer = shlex.shlex(argument, posix=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	values = list(lexer)
+	if len(values) > 2:
+		raise ValueError("Usage: .dbconfig [name] [on|off]")
+	if not values:
+		for name, option in SQLITE_DBCONFIGS.items():
+			try:
+				value = connection.getconfig(option)
+			except (AttributeError, sqlite3.Error) as error:
+				raise ValueError(f"{name}: {error}") from error
+			print(f"{name:>28}: {int(bool(value))}")
+		return
+	name = values[0].lower()
+	if name not in SQLITE_DBCONFIGS:
+		raise ValueError(f"unknown dbconfig option: {name}")
+	option = SQLITE_DBCONFIGS[name]
+	if len(values) == 1:
+		try:
+			value = connection.getconfig(option)
+		except (AttributeError, sqlite3.Error) as error:
+			raise ValueError(f"{name}: {error}") from error
+		print(f"{name:>28}: {int(bool(value))}")
+		return
+	setting = values[1].lower()
+	if setting in ("on", "true", "yes", "1"):
+		setting_value = 1
+	elif setting in ("off", "false", "no", "0"):
+		setting_value = 0
+	else:
+		raise ValueError("Usage: .dbconfig [name] [on|off]")
+	try:
+		connection.setconfig(option, setting_value)
+		value = connection.getconfig(option)
+	except (AttributeError, sqlite3.Error) as error:
+		raise ValueError(f"{name}: {error}") from error
+	print(f"{name:>28}: {int(bool(value))}")
 
 
 def get_databases(cursor):
@@ -1444,6 +1494,18 @@ def main():
 					print(f"{name} {con.getlimit(category)}")
 				except (ValueError, sqlite3.Error, AttributeError) as error:
 					print(f"Limit error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".dbconfig":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					pale_dbconfig(con, argument)
+				except (ValueError, OSError, sqlite3.Error) as error:
+					print(f"DB config error: {error}", file=sys.stderr)
 					failed = True
 				continue
 

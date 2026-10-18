@@ -72,8 +72,13 @@ text with bound values expanded by SQLite where the library provides it.
 receives; `.log off` disables it. Python's standard `sqlite3` module does not
 expose SQLite's process-wide logging hook, so this is a client-level fallback.
 
+`.dbconfig` lists the `sqlite3_db_config` options exposed by the current Python
+build. `.dbconfig <name>` reads one option, and `.dbconfig <name> on|off` changes
+it. The command reports an explicit error when the Python `sqlite3` module does
+not expose the connection configuration API.
+
 ## Tests
 
 ```text
-python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log
+python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig
 ```
