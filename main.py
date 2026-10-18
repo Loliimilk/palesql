@@ -15,7 +15,7 @@ from contextlib import redirect_stdout
 from expert import analyze_expert, parse_expert_arguments
 
 
-PALESQL_VERSION = "0.5.0"
+PALESQL_VERSION = "0.6.0"
 PYTHON_VERSION = sys.version.split()[0]
 SQLITE_LIBRARY_VERSION = sqlite3.sqlite_version
 OUTPUT_MODES = ("list", "column", "table", "box", "csv", "tabs", "json", "jsonpretty", "line", "markdown", "quote")

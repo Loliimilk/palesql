@@ -75,5 +75,5 @@ expose SQLite's process-wide logging hook, so this is a client-level fallback.
 ## Tests
 
 ```text
-python -m unittest -v test_expert test_expert_cli
+python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log
 ```
