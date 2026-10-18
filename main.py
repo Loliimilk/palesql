@@ -74,7 +74,8 @@ def pale_help():
 		".clone <file> - clone the current database to a new file\n"
 		".excel - use spreadsheet-friendly CSV output with headers\n"
 		".dbtotxt - show a hex dump of the physical main database file\n"
-		".intck - run SQLite integrity_check on the current database\n"
+		".integrity - run SQLite integrity_check on the current database\n"
+		".intck - short alias for .integrity\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
@@ -1512,9 +1513,9 @@ def main():
 				pale_lint(cursor)
 				continue
 
-			if command == ".intck":
+			if command in (".integrity", ".intck"):
 				if argument:
-					print("Usage: .intck", file=sys.stderr if output_file else sys.stdout)
+					print(f"Usage: {command}", file=sys.stderr if output_file else sys.stdout)
 					continue
 				try:
 					pale_integrity_check(cursor)

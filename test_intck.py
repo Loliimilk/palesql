@@ -27,10 +27,26 @@ class IntegrityCheckTests(unittest.TestCase):
 		self.assertEqual(out, "ok\n")
 		connection.close()
 
+	def test_integrity_is_the_full_form_of_the_short_alias(self):
+		status, out, err, connection = self.run_commands([
+			"CREATE TABLE users(id INTEGER PRIMARY KEY);",
+			".integrity",
+		])
+		self.assertEqual(status, 0, err)
+		self.assertEqual(out, "ok\n")
+		connection.close()
+
 	def test_intck_reports_usage_for_arguments(self):
 		status, out, err, connection = self.run_commands([".intck main"])
 		self.assertEqual(status, 0)
 		self.assertIn("Usage: .intck", out)
+		self.assertEqual(err, "")
+		connection.close()
+
+	def test_integrity_reports_usage_for_arguments(self):
+		status, out, err, connection = self.run_commands([".integrity main"])
+		self.assertEqual(status, 0)
+		self.assertIn("Usage: .integrity", out)
 		self.assertEqual(err, "")
 		connection.close()
 
