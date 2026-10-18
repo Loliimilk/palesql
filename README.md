@@ -81,8 +81,10 @@ not expose the connection configuration API.
 key enforcement and `.foreign_keys off` disables it. The command prints the
 value SQLite actually applies, including when a transaction prevents a change.
 
+`.journal_mode` reads the current journal mode. `.journal_mode delete|truncate|persist|memory|wal|off` requests a mode and prints the value SQLite actually applies; some modes depend on the database type and locking environment.
+
 ## Tests
 
 ```text
-python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys
+python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode
 ```

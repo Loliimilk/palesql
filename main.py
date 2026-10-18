@@ -96,6 +96,7 @@ def pale_help():
 		".limit [name] [value] - view or change SQLite runtime limits\n"
 		".dbconfig [name] [on|off] - view or change SQLite connection options\n"
 		".foreign_keys [on|off] - view or change PRAGMA foreign_keys\n"
+		".journal_mode [mode] - view or change PRAGMA journal_mode\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
 		".scanstats on|off|est - show scan metrics (estimated with Python sqlite3)\n"
@@ -181,6 +182,21 @@ def pale_foreign_keys(cursor, argument=""):
 	cursor.execute("PRAGMA foreign_keys")
 	value = cursor.fetchone()[0]
 	print(f"foreign_keys: {'on' if value else 'off'}")
+
+
+def pale_journal_mode(cursor, argument=""):
+	argument = argument.strip().lower()
+	allowed = {"delete", "truncate", "persist", "memory", "wal", "off"}
+	if argument and argument not in allowed:
+		raise ValueError("Usage: .journal_mode [delete|truncate|persist|memory|wal|off]")
+	if argument:
+		cursor.execute(f"PRAGMA journal_mode = {argument}")
+	else:
+		cursor.execute("PRAGMA journal_mode")
+	row = cursor.fetchone()
+	if not row or row[0] is None:
+		raise sqlite3.DatabaseError("SQLite did not return a journal mode")
+	print(f"journal_mode: {str(row[0]).lower()}")
 
 
 def get_databases(cursor):
@@ -1530,6 +1546,18 @@ def main():
 					pale_foreign_keys(cursor, argument)
 				except (ValueError, sqlite3.Error) as error:
 					print(f"Foreign keys error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".journal_mode":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					pale_journal_mode(cursor, argument)
+				except (ValueError, sqlite3.Error) as error:
+					print(f"Journal mode error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
