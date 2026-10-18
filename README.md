@@ -100,8 +100,12 @@ names, but the standard Python `sqlite3` module does not expose
 `sqlite3` module does not expose the API needed to unregister modules. PaleSQL
 reports that limitation instead of claiming the module was removed.
 
+`.vfsinfo` is reserved for SQLite VFS information. Python's standard `sqlite3`
+module does not expose the VFS inspection API, so PaleSQL reports that
+limitation explicitly.
+
 ## Tests
 
 ```text
-python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding test_load test_filectrl test_unmodule
+python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding test_load test_filectrl test_unmodule test_vfsinfo
 ```

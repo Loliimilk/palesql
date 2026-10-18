@@ -121,6 +121,7 @@ def pale_help():
 		".encoding [UTF-8|UTF-16le|UTF-16be] - view or change database encoding\n"
 		".load <file> [entrypoint] - load a SQLite extension\n"
 		".unmodule <name> - remove a virtual-table module\n"
+		".vfsinfo - show SQLite VFS information\n"
 		".filectrl <operation> [arguments] - SQLite file-control operation\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
@@ -292,6 +293,14 @@ def pale_unmodule(connection, argument=""):
 	if not hasattr(connection, "drop_module"):
 		raise ValueError("Python's standard sqlite3 module does not expose virtual-table module removal")
 	raise ValueError("PaleSQL cannot remove virtual-table modules on this connection")
+
+
+def pale_vfsinfo(connection, argument=""):
+	if argument.strip():
+		raise ValueError("Usage: .vfsinfo")
+	if not hasattr(connection, "vfsinfo"):
+		raise ValueError("Python's standard sqlite3 module does not expose SQLite VFS information")
+	raise ValueError("PaleSQL cannot read VFS information on this connection")
 
 
 def get_databases(cursor):
@@ -1702,6 +1711,18 @@ def main():
 					pale_unmodule(con, argument)
 				except (ValueError, OSError, sqlite3.Error) as error:
 					print(f"Unmodule error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".vfsinfo":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					pale_vfsinfo(con, argument)
+				except (ValueError, OSError, sqlite3.Error) as error:
+					print(f"VFS info error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
