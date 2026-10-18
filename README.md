@@ -96,8 +96,12 @@ afterward. Relative paths in `.read` scripts resolve from the script directory.
 names, but the standard Python `sqlite3` module does not expose
 `sqlite3_file_control()`, so PaleSQL reports that limitation explicitly.
 
+`.unmodule <name>` validates a virtual-table module name, but Python's standard
+`sqlite3` module does not expose the API needed to unregister modules. PaleSQL
+reports that limitation instead of claiming the module was removed.
+
 ## Tests
 
 ```text
-python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding test_load test_filectrl
+python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding test_load test_filectrl test_unmodule
 ```

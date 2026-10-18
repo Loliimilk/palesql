@@ -120,6 +120,7 @@ def pale_help():
 		".journal_mode [mode] - view or change PRAGMA journal_mode\n"
 		".encoding [UTF-8|UTF-16le|UTF-16be] - view or change database encoding\n"
 		".load <file> [entrypoint] - load a SQLite extension\n"
+		".unmodule <name> - remove a virtual-table module\n"
 		".filectrl <operation> [arguments] - SQLite file-control operation\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
@@ -279,6 +280,18 @@ def pale_filectrl(connection, argument=""):
 	if not hasattr(connection, "file_control"):
 		raise ValueError("sqlite3_file_control is not exposed by Python's standard sqlite3 module")
 	raise ValueError("PaleSQL cannot call sqlite3_file_control on this connection")
+
+
+def pale_unmodule(connection, argument=""):
+	lexer = shlex.shlex(argument, posix=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	values = list(lexer)
+	if len(values) != 1 or not values[0]:
+		raise ValueError("Usage: .unmodule <name>")
+	if not hasattr(connection, "drop_module"):
+		raise ValueError("Python's standard sqlite3 module does not expose virtual-table module removal")
+	raise ValueError("PaleSQL cannot remove virtual-table modules on this connection")
 
 
 def get_databases(cursor):
@@ -1677,6 +1690,18 @@ def main():
 					pale_filectrl(con, argument)
 				except (ValueError, OSError, sqlite3.Error) as error:
 					print(f"File control error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".unmodule":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					pale_unmodule(con, argument)
+				except (ValueError, OSError, sqlite3.Error) as error:
+					print(f"Unmodule error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
