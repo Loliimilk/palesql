@@ -462,7 +462,7 @@ def pale_help():
 		".dbtotxt - show a hex dump of the physical main database file\n"
 		".sha3sum [pattern] - show a deterministic SHA3-256 hash of database content\n"
 	".integrity - run SQLite integrity_check on the current database\n"
-		".intck - short alias for .integrity\n"
+		".intck - incremental integrity check, table by table\n"
 		".selftest - run a consistency self-test of the current database\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
@@ -1518,6 +1518,24 @@ def pale_integrity_check(cursor):
 		raise ValueError(f"integrity check failed: {error}") from error
 	for result in results:
 		print(result[0] if result else "")
+
+
+def pale_incremental_integrity_check(cursor):
+	"""Check each user table independently so large databases are bounded per step."""
+	try:
+		cursor.execute("SELECT name FROM main.sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+		tables = [row[0] for row in cursor.fetchall()]
+		issues = []
+		for table in tables:
+			pragma_name = table.replace("'", "''")
+			cursor.execute(f"PRAGMA quick_check('{pragma_name}')")
+			issues.extend(result[0] for result in cursor.fetchall() if result and result[0] != "ok")
+	except sqlite3.Error as error:
+		raise ValueError(f"incremental integrity check failed: {error}") from error
+	for issue in issues:
+		print(issue)
+	if not issues:
+		print("ok")
 
 
 def pale_selftest(connection):
@@ -2601,7 +2619,10 @@ def main():
 					print(f"Usage: {command}", file=sys.stderr if output_file else sys.stdout)
 					continue
 				try:
-					pale_integrity_check(cursor)
+					if command == ".intck":
+						pale_incremental_integrity_check(cursor)
+					else:
+						pale_integrity_check(cursor)
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Integrity check error: {error}", file=sys.stderr)
 					failed = True
