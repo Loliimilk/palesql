@@ -59,26 +59,34 @@ def import_file(cursor, filename, table_name, nullvalue="", column_separator=Non
     delimiter = column_separator if column_separator is not None else "\t" if path.suffix.lower() in (".tsv", ".tab") else ","
     if len(delimiter) != 1:
         raise ValueError("import separator must be one character; use .separator for CSV/TSV output only")
-    with path.open("r", encoding="utf-8-sig", newline="") as source:
-        rows = list(csv.reader(source, delimiter=delimiter))
-    if not rows:
-        return 0
-    if any(len(row) != len(columns) for row in rows):
-        bad = next(row for row in rows if len(row) != len(columns))
-        raise ValueError(f"expected {len(columns)} columns, got {len(bad)}")
     placeholders = ", ".join("?" for column in columns)
     column_sql = ", ".join(quote_name(column) for column in columns)
-    cursor.execute("BEGIN")
-    try:
-        cursor.executemany(
-            f"INSERT INTO {qualified} ({column_sql}) VALUES ({placeholders})",
-            [[None if nullvalue and value == nullvalue else value for value in row] for row in rows],
-        )
-        cursor.execute("COMMIT")
-    except Exception:
-        cursor.execute("ROLLBACK")
-        raise
-    return len(rows)
+    statement = f"INSERT INTO {qualified} ({column_sql}) VALUES ({placeholders})"
+    inserted = 0
+    batch = []
+    # Keep a single transaction for all-or-nothing imports, but do not retain an
+    # entire input file in memory.  A bounded batch makes large CSV imports work
+    # the same way as small ones.
+    with path.open("r", encoding="utf-8-sig", newline="") as source:
+        reader = csv.reader(source, delimiter=delimiter)
+        cursor.execute("BEGIN")
+        try:
+            for row in reader:
+                if len(row) != len(columns):
+                    raise ValueError(f"expected {len(columns)} columns, got {len(row)}")
+                batch.append([None if nullvalue and value == nullvalue else value for value in row])
+                if len(batch) == 1000:
+                    cursor.executemany(statement, batch)
+                    inserted += len(batch)
+                    batch.clear()
+            if batch:
+                cursor.executemany(statement, batch)
+                inserted += len(batch)
+            cursor.execute("COMMIT")
+        except BaseException:
+            cursor.execute("ROLLBACK")
+            raise
+    return inserted
 
 
 def pale_dump(cursor, object_names=()):

@@ -350,13 +350,20 @@ class PaleCLI:
 
 	def finish_once(self):
 		state = self.state
-		if state.once_file:
-			state.once_file.close()
-			state.once_file = None
-			if state.output_file:
-				state.output_file.close()
-				state.output_file = None
-			sys.stdout = state.console
+		if not state.once_file:
+			return
+		handles = [state.once_file]
+		state.once_file = None
+		if state.output_file:
+			handles.append(state.output_file)
+			state.output_file = None
+		sys.stdout = state.console
+		for handle in handles:
+			try:
+				handle.close()
+			except OSError as error:
+				print(f"Output error: {error}", file=sys.stderr)
+				state.failed = True
 
 	def run_expert(self, statement, options):
 		state = self.state
@@ -386,8 +393,25 @@ class PaleCLI:
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
 				capture_output = io.StringIO() if (state.www_pending or state.testcase_name is not None) else None
-				with redirect_stdout(capture_output if capture_output is not None else (state.once_file if state.once_file is not None else sys.stdout)):
-					success = execute_sql(state.cursor, statement, state.headers, state.mode, state.nullvalue, state.column_separator, state.row_separator, state.column_widths, state.crlf, state.changes, state.source_context, state.parameters, state.timer, state.stats, state.eqp, state.explain, state.scanstats, self.diagnostics.log_callback)
+				try:
+					with redirect_stdout(capture_output if capture_output is not None else (state.once_file if state.once_file is not None else sys.stdout)):
+						success = execute_sql(state.cursor, statement, state.headers, state.mode, state.nullvalue, state.column_separator, state.row_separator, state.column_widths, state.crlf, state.changes, state.source_context, state.parameters, state.timer, state.stats, state.eqp, state.explain, state.scanstats, self.diagnostics.log_callback)
+				except OSError as error:
+					# A full disk or an interrupted file handle must not turn a normal
+					# CLI operation into a Python traceback.  Drop the failing redirect so
+					# later interactive commands can still be shown on the console.
+					if state.once_file:
+						self.finish_once()
+					elif state.output_file:
+						try:
+							state.output_file.close()
+						except OSError:
+							pass
+						state.output_file = None
+						sys.stdout = state.console
+					print(f"Output error: {error}", file=sys.stderr)
+					state.failed = True
+					return ""
 				if capture_output is not None:
 					captured = capture_output.getvalue()
 					if state.testcase_name is not None:
@@ -561,10 +585,13 @@ class PaleCLI:
 	def close(self):
 		self.diagnostics.close(self.state.connection)
 		sys.stdout = self.state.console
-		if self.state.once_file:
-			self.state.once_file.close()
-		if self.state.output_file:
-			self.state.output_file.close()
+		for handle in (self.state.once_file, self.state.output_file):
+			if handle:
+				try:
+					handle.close()
+				except OSError as error:
+					print(f"Output error: {error}", file=sys.stderr)
+					self.state.failed = True
 		close_all(self.state.connections)
 
 	def run(self):
@@ -587,7 +614,7 @@ class PaleCLI:
 			result = self.input_loop()
 		finally:
 			self.close()
-		return result if result is not None else (1 if self.state.failed else 0)
+		return 1 if self.state.failed else (result if result is not None else 0)
 
 
 def main(argv=None):
