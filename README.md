@@ -88,8 +88,12 @@ sets SQLite's busy timeout on the current connection.
 
 `.encoding` reads the database text encoding. `.encoding UTF-8`, `.encoding UTF-16le`, and `.encoding UTF-16be` request an encoding through SQLite; an existing schema may keep its already established encoding.
 
+`.load <file> [entrypoint]` loads a SQLite extension for the current connection.
+PaleSQL enables extension loading only during the operation and disables it
+afterward. Relative paths in `.read` scripts resolve from the script directory.
+
 ## Tests
 
 ```text
-python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding
+python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding test_load
 ```

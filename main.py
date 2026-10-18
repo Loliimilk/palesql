@@ -99,6 +99,7 @@ def pale_help():
 		".foreign_keys [on|off] - view or change PRAGMA foreign_keys\n"
 		".journal_mode [mode] - view or change PRAGMA journal_mode\n"
 		".encoding [UTF-8|UTF-16le|UTF-16be] - view or change database encoding\n"
+		".load <file> [entrypoint] - load a SQLite extension\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
 		".scanstats on|off|est - show scan metrics (estimated with Python sqlite3)\n"
@@ -220,6 +221,28 @@ def pale_encoding(cursor, argument=""):
 	if not row or row[0] is None:
 		raise sqlite3.DatabaseError("SQLite did not return an encoding")
 	print(f"encoding: {row[0]}")
+
+
+def pale_load_extension(connection, argument, base_path=None):
+	lexer = shlex.shlex(argument, posix=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	values = list(lexer)
+	if len(values) not in (1, 2) or not values[0]:
+		raise ValueError("Usage: .load <file> [entrypoint]")
+	path = Path(values[0]).expanduser()
+	if not path.is_absolute() and base_path is not None:
+		path = base_path / path
+	path = path.resolve()
+	connection.enable_load_extension(True)
+	try:
+		if len(values) == 2:
+			connection.load_extension(str(path), entrypoint=values[1])
+		else:
+			connection.load_extension(str(path))
+	finally:
+		connection.enable_load_extension(False)
+	print(f"Loaded extension: {path}")
 
 
 def get_databases(cursor):
@@ -1593,6 +1616,19 @@ def main():
 					pale_encoding(cursor, argument)
 				except (ValueError, sqlite3.Error) as error:
 					print(f"Encoding error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".load":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					base_path = scripts[-1][0].parent if scripts else None
+					pale_load_extension(con, argument, base_path)
+				except (OSError, ValueError, sqlite3.Error) as error:
+					print(f"Load error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
