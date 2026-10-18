@@ -92,6 +92,7 @@ def pale_help():
 		".stats on|off - show SQL execution statistics\n"
 		".scanstats on|off|est - show scan metrics (estimated with Python sqlite3)\n"
 		".progress N - invoke a progress callback every N SQLite opcodes (0 disables)\n"
+		".trace on|off|stdout|stderr|<file> - show SQL executed by SQLite\n"
 		".eqp on|off|full - show EXPLAIN QUERY PLAN for SQL\n"
 		".explain on|off|auto - format EXPLAIN results\n"
 		".expert [--verbose] [--sample 0..100] - analyze the next SQL instead of executing it\n"
@@ -909,6 +910,8 @@ def main():
 	stats = False
 	scanstats = "off"
 	progress_calls = 0
+	trace_mode = "off"
+	trace_file = None
 	eqp = "off"
 	explain = "auto"
 	expert_options = None
@@ -941,6 +944,28 @@ def main():
 		progress_calls += 1
 		print(f"Progress {progress_calls}")
 		return 0
+
+	def trace_callback(statement):
+		target = trace_file if trace_mode == "file" else sys.stderr if trace_mode == "stderr" else sys.stdout
+		try:
+			target.write(f"Trace: {statement}\n")
+			target.flush()
+		except (AttributeError, OSError, ValueError):
+			pass
+
+	def install_trace():
+		if not hasattr(con, "set_trace_callback"):
+			raise ValueError("this SQLite connection does not support tracing")
+		con.set_trace_callback(trace_callback)
+
+	def clear_trace():
+		nonlocal trace_file, trace_mode
+		if con is not None and hasattr(con, "set_trace_callback"):
+			con.set_trace_callback(None)
+		if trace_file:
+			trace_file.close()
+			trace_file = None
+		trace_mode = "off"
 
 	def finish_once():
 		nonlocal once_file, output_file
@@ -1434,6 +1459,52 @@ def main():
 				con.set_progress_handler(progress_handler, int(argument))
 				continue
 
+			if command == ".trace":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				if not argument:
+					print("Usage: .trace on|off|stdout|stderr|<file>", file=sys.stderr if output_file else sys.stdout)
+					continue
+				trace_argument = argument.lower()
+				if trace_argument == "off":
+					clear_trace()
+					continue
+				if trace_argument in ("on", "stdout", "stderr"):
+					try:
+						clear_trace()
+						trace_mode = "stderr" if trace_argument == "stderr" else trace_argument
+						install_trace()
+					except (OSError, ValueError, AttributeError) as error:
+						trace_mode = "off"
+						print(f"Trace error: {error}", file=sys.stderr)
+						failed = True
+					continue
+				try:
+					lexer = shlex.shlex(argument, posix=True)
+					lexer.whitespace_split = True
+					lexer.commenters = ""
+					lexer.escape = ""
+					paths = list(lexer)
+					if len(paths) != 1 or not paths[0]:
+						raise ValueError("Usage: .trace on|off|stdout|stderr|<file>")
+					path = Path(paths[0]).expanduser().resolve()
+					protected = protected_backup_paths()
+					if trace_file:
+						protected.append(Path(trace_file.name).resolve())
+					if any(path == item or (path.exists() and item.exists() and path.samefile(item)) for item in protected):
+						raise ValueError("Trace file must not overwrite an open database, script, or output file")
+					new_trace_file = path.open("w", encoding="utf-8", newline="\n")
+					clear_trace()
+					trace_file = new_trace_file
+					trace_mode = "file"
+					install_trace()
+				except (OSError, ValueError, AttributeError) as error:
+					print(f"Trace error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
 			if command == ".eqp":
 				if argument.lower() not in ("on", "off", "full"):
 					print("Usage: .eqp on|off|full", file=sys.stderr if output_file else sys.stdout)
@@ -1481,6 +1552,7 @@ def main():
 					continue
 
 				if con is not None:
+					clear_trace()
 					con.close()
 				expert_options = None
 
@@ -1590,6 +1662,7 @@ def main():
 				continue
 
 			if command == ".close":
+				clear_trace()
 				con.close()
 				expert_options = None
 				con = None
@@ -1621,6 +1694,7 @@ def main():
 			sql = run_sql(sql)
 
 	finally:
+		clear_trace()
 		sys.stdout = console
 		if once_file:
 			once_file.close()

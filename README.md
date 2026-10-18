@@ -62,6 +62,12 @@ removes it. The callback never interrupts SQL; it is intended for observing
 long statements. This uses `Connection.set_progress_handler()` from Python's
 standard library.
 
+`.trace on` shows each SQL statement as SQLite starts it, including implicit
+statements such as transaction setup and trigger work. `.trace off` disables the
+callback; `.trace stdout` and `.trace stderr` select an explicit stream, while a
+quoted path writes the trace to a UTF-8 file. Python's callback receives the SQL
+text with bound values expanded by SQLite where the library provides it.
+
 ## Tests
 
 ```text
