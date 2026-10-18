@@ -15,6 +15,8 @@ import itertools
 import tempfile
 import fnmatch
 import subprocess
+import webbrowser
+import html
 from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
@@ -451,6 +453,7 @@ def pale_help():
 		".nonce <string> - allow one blocked command in safe mode\n"
 		".imposter <index> <table> - create a temporary index diagnostic snapshot\n"
 		".session ... - manage a text changeset session (Python fallback)\n"
+		".www - show the next SQL result in a browser\n"
 		".connection new|list|use N|close N - manage independent SQLite connections\n"
 		".connections - list independent SQLite connections\n"
 		".close - close current database\n"
@@ -1344,6 +1347,17 @@ def pale_recover(connection):
 	return not incomplete
 
 
+def pale_www(text):
+	with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".html", prefix="palesql-", delete=False) as page:
+		page.write("<!doctype html><meta charset='utf-8'><title>PaleSQL result</title><pre>")
+		page.write(html.escape(text))
+		page.write("</pre>")
+	path = Path(page.name).resolve()
+	if not webbrowser.open(path.as_uri()):
+		raise OSError("could not open the system browser")
+	print(f"Opened result in browser: {path}")
+
+
 def pale_shell(argument):
 	if not argument.strip():
 		raise ValueError("Usage: .shell <command>")
@@ -1986,6 +2000,7 @@ def main():
 	safe_nonce = None
 	auth_enabled = False
 	session_state = None
+	www_pending = False
 	main_prompt = "PaleSQL: "
 	continue_prompt = "    ...: "
 	failed = False
@@ -2085,7 +2100,7 @@ def main():
 			finish_once()
 
 	def run_sql(buffer):
-		nonlocal failed, expert_options
+		nonlocal failed, expert_options, www_pending
 		if expert_options is not None:
 			if not sqlite3.complete_statement(buffer):
 				return buffer if sql_context(buffer)[1] or sql_context(buffer)[0] == "/*" else ""
@@ -2096,8 +2111,17 @@ def main():
 		for index, char in enumerate(buffer):
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
-				with redirect_stdout(once_file if once_file is not None else sys.stdout):
+				web_output = io.StringIO() if www_pending else None
+				with redirect_stdout(web_output if web_output is not None else (once_file if once_file is not None else sys.stdout)):
 					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats, eqp, explain, scanstats, log_callback)
+				if web_output is not None:
+					www_pending = False
+					if success:
+						try:
+							pale_www(web_output.getvalue())
+						except OSError as error:
+							print(f"WWW error: {error}", file=sys.stderr)
+							failed = True
 				if not success:
 					failed = True
 					if bail and scripts:
@@ -2179,7 +2203,19 @@ def main():
 				print("Nonce armed for the next safe-mode command")
 				continue
 
-			if safe_mode and command in (".shell", ".system", ".load", ".output", ".once", ".archive", ".backup", ".restore", ".save", ".clone", ".import", ".filectrl", ".unmodule", ".imposter", ".session"):
+			if command == ".www":
+				if safe_mode:
+					print("Safe mode: .www is disabled", file=sys.stderr)
+					failed = True
+					continue
+				if argument:
+					print("Usage: .www", file=sys.stderr if output_file else sys.stdout)
+					continue
+				www_pending = True
+				print("The next SQL result will open in a browser")
+				continue
+
+			if safe_mode and command in (".shell", ".system", ".load", ".output", ".once", ".archive", ".backup", ".restore", ".save", ".clone", ".import", ".filectrl", ".unmodule", ".imposter", ".session", ".www"):
 				if safe_nonce is None:
 					print(f"Safe mode: {command} is disabled", file=sys.stderr)
 					failed = True
