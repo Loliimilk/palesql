@@ -93,6 +93,7 @@ def pale_help():
 		".scanstats on|off|est - show scan metrics (estimated with Python sqlite3)\n"
 		".progress N - invoke a progress callback every N SQLite opcodes (0 disables)\n"
 		".trace on|off|stdout|stderr|<file> - show SQL executed by SQLite\n"
+		".log off|stdout|stderr|<file> - log SQLite errors and messages\n"
 		".eqp on|off|full - show EXPLAIN QUERY PLAN for SQL\n"
 		".explain on|off|auto - format EXPLAIN results\n"
 		".expert [--verbose] [--sample 0..100] - analyze the next SQL instead of executing it\n"
@@ -453,7 +454,7 @@ def print_scanstats(cursor, sql, mode, parameters=None):
 		print(f"Scanstats unavailable: {error}")
 
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False, stats=False, eqp="off", explain="auto", scanstats="off"):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False, stats=False, eqp="off", explain="auto", scanstats="off", log_callback=None):
 	started = time.perf_counter()
 	try:
 		if eqp != "off" and re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH)\b", sql, re.IGNORECASE):
@@ -503,7 +504,10 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 		if timer:
 			print(f"Time: {time.perf_counter() - started:.6f} seconds")
 		location = f"{error_context[0]}:{error_context[1]}: " if error_context else ""
-		print(f"SQL error: {location}{error}", file=sys.stderr)
+		message = f"SQL error: {location}{error}"
+		if log_callback:
+			log_callback(message)
+		print(message, file=sys.stderr)
 		return False
 
 def parameter_name(name):
@@ -912,6 +916,8 @@ def main():
 	progress_calls = 0
 	trace_mode = "off"
 	trace_file = None
+	log_mode = "off"
+	log_file = None
 	eqp = "off"
 	explain = "auto"
 	expert_options = None
@@ -967,6 +973,21 @@ def main():
 			trace_file = None
 		trace_mode = "off"
 
+	def log_callback(message):
+		target = log_file if log_mode == "file" else console if log_mode == "stdout" else sys.stderr
+		try:
+			target.write(f"SQLite log: {message}\n")
+			target.flush()
+		except (AttributeError, OSError, ValueError):
+			pass
+
+	def clear_log():
+		nonlocal log_file, log_mode
+		if log_file:
+			log_file.close()
+			log_file = None
+		log_mode = "off"
+
 	def finish_once():
 		nonlocal once_file, output_file
 		if once_file:
@@ -1005,7 +1026,7 @@ def main():
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
 				with redirect_stdout(once_file if once_file is not None else sys.stdout):
-					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats, eqp, explain, scanstats)
+					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats, eqp, explain, scanstats, log_callback)
 				if not success:
 					failed = True
 					if bail and scripts:
@@ -1505,6 +1526,44 @@ def main():
 					failed = True
 				continue
 
+			if command == ".log":
+				if not argument:
+					print("Usage: .log off|stdout|stderr|<file>", file=sys.stderr if output_file else sys.stdout)
+					continue
+				log_argument = argument.lower()
+				if log_argument == "off":
+					clear_log()
+					continue
+				if log_argument in ("stdout", "stderr"):
+					clear_log()
+					log_mode = log_argument
+					continue
+				try:
+					lexer = shlex.shlex(argument, posix=True)
+					lexer.whitespace_split = True
+					lexer.commenters = ""
+					lexer.escape = ""
+					paths = list(lexer)
+					if len(paths) != 1 or not paths[0]:
+						raise ValueError("Usage: .log off|stdout|stderr|<file>")
+					path = Path(paths[0]).expanduser().resolve()
+					protected = [active[0] for active in scripts]
+					if con is not None:
+						protected.extend(protected_backup_paths())
+					for handle in (output_file, once_file, trace_file, log_file):
+						if handle:
+							protected.append(Path(handle.name).resolve())
+					if any(path == item or (path.exists() and item.exists() and path.samefile(item)) for item in protected):
+						raise ValueError("Log file must not overwrite an open database, script, or output file")
+					new_log_file = path.open("w", encoding="utf-8", newline="\n")
+					clear_log()
+					log_file = new_log_file
+					log_mode = "file"
+				except (OSError, ValueError) as error:
+					print(f"Log error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
 			if command == ".eqp":
 				if argument.lower() not in ("on", "off", "full"):
 					print("Usage: .eqp on|off|full", file=sys.stderr if output_file else sys.stdout)
@@ -1695,6 +1754,7 @@ def main():
 
 	finally:
 		clear_trace()
+		clear_log()
 		sys.stdout = console
 		if once_file:
 			once_file.close()

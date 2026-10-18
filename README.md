@@ -68,6 +68,10 @@ callback; `.trace stdout` and `.trace stderr` select an explicit stream, while a
 quoted path writes the trace to a UTF-8 file. Python's callback receives the SQL
 text with bound values expanded by SQLite where the library provides it.
 
+`.log stdout`, `.log stderr`, and `.log <file>` record SQLite errors that PaleSQL
+receives; `.log off` disables it. Python's standard `sqlite3` module does not
+expose SQLite's process-wide logging hook, so this is a client-level fallback.
+
 ## Tests
 
 ```text
