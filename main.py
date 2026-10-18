@@ -425,13 +425,79 @@ def analyze_expert(connection, sql_text, *, sample=0, verbose=False):
 	return "\n".join(output) + "\n"
 
 def pale_open(name):
-	if not name.lower().endswith(".db"):
-		name += ".db"
-
-	con = sqlite3.connect(name, isolation_level=None)
+	name = str(name)
+	if name == ":memory:":
+		con = sqlite3.connect(name, isolation_level=None)
+	elif name.lower().startswith("file:"):
+		con = sqlite3.connect(name, uri=True, isolation_level=None)
+	else:
+		if not name.lower().endswith(".db"):
+			name += ".db"
+		con = sqlite3.connect(name, isolation_level=None)
 	cursor = con.cursor()
 
 	return con, cursor
+
+
+def parse_single_argument(argument, usage):
+	lexer = shlex.shlex(argument, posix=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	lexer.escape = ""
+	values = list(lexer)
+	if len(values) != 1 or not values[0]:
+		raise ValueError(usage)
+	return values[0]
+
+
+def cli_input(prompt, history):
+	if os.name != "nt" or not sys.stdin.isatty():
+		return input(prompt)
+	try:
+		import msvcrt
+	except ImportError:
+		return input(prompt)
+	sys.stdout.write(prompt)
+	sys.stdout.flush()
+	buffer = []
+	history_index = len(history)
+	draft = ""
+	while True:
+		key = msvcrt.getwch()
+		if key in ("\r", "\n"):
+			sys.stdout.write("\n")
+			return "".join(buffer)
+		if key == "\003":
+			raise KeyboardInterrupt
+		if key == "\004":
+			if not buffer:
+				raise EOFError
+			continue
+		if key in ("\b", "\x7f"):
+			if buffer:
+				buffer.pop()
+				sys.stdout.write("\b \b")
+				sys.stdout.flush()
+			continue
+		if key in ("\x00", "\xe0"):
+			code = ord(msvcrt.getwch())
+			if code in (72, 80):
+				if code == 72:
+					if history_index == len(history):
+						draft = "".join(buffer)
+					history_index = max(0, history_index - 1)
+				else:
+					history_index = min(len(history), history_index + 1)
+				value = draft if history_index == len(history) else history[history_index]
+				for _ in buffer:
+					sys.stdout.write("\b \b")
+				buffer = list(value)
+				sys.stdout.write(value)
+				sys.stdout.flush()
+			continue
+		buffer.append(key)
+		sys.stdout.write(key)
+		sys.stdout.flush()
 
 
 def pale_help():
@@ -1050,6 +1116,52 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 		for row in rows:
 			emit(separator.join(format_value(value) for value in row))
 
+
+def print_results_stream(names, cursor, headers, mode, nullvalue="", column_separator=None, row_separator=None, newline=None):
+	"""Render row-oriented modes without materializing the complete result set."""
+	ending = newline if newline is not None else "\n"
+	result_count = 0
+	if mode in ("csv", "tabs"):
+		separator = column_separator if column_separator is not None else "," if mode == "csv" else "\t"
+		ending = row_separator if row_separator is not None else newline if newline is not None else "\r\n"
+		rows = ([names] if headers else [])
+		for row in rows:
+			fields = []
+			for value in row:
+				text = result_text(value, nullvalue)
+				if any(char in text for char in ('"', '\r', '\n')) or (separator and separator in text) or (ending and ending in text) or (len(row) == 1 and not text):
+					text = '"' + text.replace('"', '""') + '"'
+				fields.append(text)
+			write_result(separator.join(fields) + ending)
+		for row in cursor:
+			result_count += 1
+			fields = []
+			for value in row:
+				text = result_text(value, nullvalue)
+				if any(char in text for char in ('"', '\r', '\n')) or (separator and separator in text) or (ending and ending in text) or (len(row) == 1 and not text):
+					text = '"' + text.replace('"', '""') + '"'
+				fields.append(text)
+			write_result(separator.join(fields) + ending)
+		return result_count
+	if mode == "line":
+		for index, row in enumerate(cursor):
+			result_count += 1
+			if index:
+				write_result(ending)
+			for name, value in zip(names, row):
+				text = result_text(value, nullvalue).replace("\r", "\\r").replace("\n", "\\n")
+				write_result((f"{name} = " if headers else "") + text + ending)
+		return result_count
+	separator = "," if mode == "quote" else column_separator if column_separator is not None else "|"
+	ending = ending if mode == "quote" or row_separator is None else row_separator
+	format_value = sql_literal if mode == "quote" else lambda value: result_text(value, nullvalue)
+	if headers:
+		write_result(separator.join(format_value(name) for name in names) + ending)
+	for row in cursor:
+		result_count += 1
+		write_result(separator.join(format_value(value) for value in row) + ending)
+	return result_count
+
 def print_scanstats(cursor, sql, mode, parameters=None):
 	if mode == "off" or not re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH)\b", sql, re.IGNORECASE):
 		return
@@ -1097,14 +1209,17 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 		if cursor.description:
 			names = [column[0] for column in cursor.description]
 			newline = "\r\n" if crlf and not sys.stdout.isatty() else "\n"
-			rows = cursor.fetchall()
-			result_count = len(rows)
 			formatted_mode = mode
 			formatted_headers = headers
 			if explain != "off" and re.match(r"\s*EXPLAIN\b", sql, re.IGNORECASE):
 				formatted_mode = "column"
 				formatted_headers = True
-			print_results(names, rows, formatted_headers, formatted_mode, nullvalue, column_separator, row_separator, column_widths, newline)
+			if formatted_mode in ("list", "tabs", "csv", "line", "quote"):
+				result_count = print_results_stream(names, cursor, formatted_headers, formatted_mode, nullvalue, column_separator, row_separator, newline)
+			else:
+				rows = cursor.fetchall()
+				result_count = len(rows)
+				print_results(names, rows, formatted_headers, formatted_mode, nullvalue, column_separator, row_separator, column_widths, newline)
 		elif changes and cursor.rowcount >= 0:
 			print(f"changes: {cursor.rowcount}")
 		if timer:
@@ -2293,7 +2408,16 @@ def main():
 					finish_once()
 				start = index + 1
 		remaining = buffer[start:]
-		return remaining if sql_context(remaining)[1] or sql_context(remaining)[0] == "/*" else ""
+		state, has_sql = sql_context(remaining)
+		if has_sql or state == "/*":
+			return remaining
+		if remaining.strip() and remaining.lstrip().startswith(("--", "/*")):
+			try:
+				cursor.execute(remaining)
+			except sqlite3.Error as error:
+				print(f"SQL error: {error}", file=sys.stderr)
+				failed = True
+		return ""
 
 	try:
 		while True:
@@ -2321,19 +2445,37 @@ def main():
 				else:
 					source_context = None
 					with redirect_stdout(console):
-						inp = input((continue_prompt if sql else main_prompt) if interactive else "")
+						prompt = (continue_prompt if sql else main_prompt) if interactive else ""
+						inp = cli_input(prompt, history) if interactive else input(prompt)
 			except EOFError:
 				if sql_context(sql)[1] or sql_context(sql)[0] == "/*":
 					print("SQL error: incomplete statement at end of input", file=sys.stderr)
 					return 1
 				break
+			except KeyboardInterrupt:
+				if con is not None:
+					try:
+						con.interrupt()
+					except sqlite3.Error:
+						pass
+				print("^C", file=console)
+				sql = ""
+				expert_options = None
+				continue
 			if inp.strip():
 				history.append(inp.rstrip("\r\n"))
 				if len(history) > 1000:
 					del history[:-1000]
 			if sql_context(sql)[0] not in ("", "--"):
 				sql += inp + "\n"
-				sql = run_sql(sql)
+				try:
+					sql = run_sql(sql)
+				except KeyboardInterrupt:
+					if con is not None:
+						con.interrupt()
+					print("^C", file=console)
+					sql = ""
+					expert_options = None
 				continue
 			raw_input = inp
 
@@ -3183,7 +3325,12 @@ def main():
 
 			if command == ".open":
 				if not argument:
-					print("No name of database", file=sys.stderr if output_file else sys.stdout)
+					print("Usage: .open <database>", file=sys.stderr if output_file else sys.stdout)
+					continue
+				try:
+					open_name = parse_single_argument(argument, "Usage: .open <database>")
+				except ValueError as error:
+					print(error, file=sys.stderr if output_file else sys.stdout)
 					continue
 
 				if con is not None:
@@ -3195,7 +3342,7 @@ def main():
 				expert_options = None
 
 				try:
-					con, cursor = pale_open(argument)
+					con, cursor = pale_open(open_name)
 					connections.append((con, cursor))
 					active_connection = len(connections) - 1
 
@@ -3357,10 +3504,8 @@ def main():
 
 			if command == ".readonly":
 				try:
-					values = shlex.split(argument) if argument[:1] in ("'", '"') else ([argument] if argument else [])
-					if len(values) != 1:
-						raise ValueError("Usage: .readonly <file>")
-					path = Path(values[0]).expanduser().resolve()
+					filename = parse_single_argument(argument, "Usage: .readonly <file>")
+					path = Path(filename).expanduser().resolve()
 					uri = "file:" + str(path).replace("\\", "/") + "?mode=ro"
 					new_con = sqlite3.connect(uri, uri=True, isolation_level=None)
 					new_cursor = new_con.cursor()
@@ -3543,8 +3688,14 @@ def main():
 				continue
 
 			sql += raw_input + "\n"
-
-			sql = run_sql(sql)
+			try:
+				sql = run_sql(sql)
+			except KeyboardInterrupt:
+				if con is not None:
+					con.interrupt()
+				print("^C", file=console)
+				sql = ""
+				expert_options = None
 
 	finally:
 		clear_trace()
