@@ -449,6 +449,7 @@ def pale_help():
 		".safe on|off - block shell, extension, and file operations\n"
 		".auth on|off - show SQLite authorizer callbacks\n"
 		".nonce <string> - allow one blocked command in safe mode\n"
+		".imposter <index> <table> - create a temporary index diagnostic snapshot\n"
 		".connection new|list|use N|close N - manage independent SQLite connections\n"
 		".connections - list independent SQLite connections\n"
 		".close - close current database\n"
@@ -815,6 +816,36 @@ def pale_indexes(cursor, table_name):
 		if not table_name or identifier_key(table) == identifier_key(table_name) or identifier_key(f"{database}.{table}") == identifier_key(table_name):
 			rows.append((object_label(database, name),))
 	return rows
+
+
+def pale_imposter(cursor, argument):
+	values = shlex.split(argument)
+	if len(values) != 2:
+		raise ValueError("Usage: .imposter <index> <table>")
+	index_name, imposter_name = values
+	index = next((row for row in database_objects(cursor, "index") if row[0] == "main" and identifier_key(row[2]) == identifier_key(index_name)), None)
+	if index is None:
+		raise ValueError(f"index not found: {index_name}")
+	table_name = index[3]
+	info = table_pragma(cursor, "main", "index_xinfo", index_name)
+	keys = [row for row in info if len(row) > 5 and row[5] and row[1] >= 0]
+	if not keys:
+		raise ValueError("index has no ordinary columns; expression indexes are not supported")
+	table_info = {row[0]: (row[1], row[2]) for row in table_pragma(cursor, "main", "table_xinfo", table_name)}
+	columns = []
+	for row in sorted(keys, key=lambda item: item[0]):
+		if row[1] not in table_info:
+			raise ValueError(f"cannot map index column {row[1]}")
+		name, declared_type = table_info[row[1]]
+		columns.append((name, declared_type or ""))
+	if len({identifier_key(name) for name, unused in columns}) != len(columns):
+		raise ValueError("index columns must have unique names")
+	definition = ", ".join(f"{quote_name(name)} {declared_type}".rstrip() for name, declared_type in columns)
+	column_sql = ", ".join(quote_name(name) for name, unused in columns)
+	cursor.execute(f"DROP TABLE IF EXISTS temp.{quote_name(imposter_name)}")
+	cursor.execute(f"CREATE TEMP TABLE {quote_name(imposter_name)} ({definition})")
+	cursor.execute(f"INSERT INTO temp.{quote_name(imposter_name)} ({column_sql}) SELECT {column_sql} FROM main.{quote_name(table_name)}")
+	print(f"Imposter snapshot '{imposter_name}' created from index '{index_name}' ({cursor.rowcount} rows)")
 
 def result_text(value, nullvalue=""):
 	if value is None:
@@ -2062,7 +2093,7 @@ def main():
 				print("Nonce armed for the next safe-mode command")
 				continue
 
-			if safe_mode and command in (".shell", ".system", ".load", ".output", ".once", ".archive", ".backup", ".restore", ".save", ".clone", ".import", ".filectrl", ".unmodule"):
+			if safe_mode and command in (".shell", ".system", ".load", ".output", ".once", ".archive", ".backup", ".restore", ".save", ".clone", ".import", ".filectrl", ".unmodule", ".imposter"):
 				if safe_nonce is None:
 					print(f"Safe mode: {command} is disabled", file=sys.stderr)
 					failed = True
@@ -2870,6 +2901,14 @@ def main():
 					print(f"Authorizer {'on' if auth_enabled else 'off'}")
 				except (ValueError, sqlite3.Error) as error:
 					print(f"Authorizer error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".imposter":
+				try:
+					pale_imposter(cursor, argument)
+				except (ValueError, sqlite3.Error) as error:
+					print(f"Imposter error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
