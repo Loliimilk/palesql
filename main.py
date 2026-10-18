@@ -460,6 +460,7 @@ def pale_help():
 		".clone <file> - clone the current database to a new file\n"
 		".excel - use spreadsheet-friendly CSV output with headers\n"
 		".dbtotxt - show a hex dump of the physical main database file\n"
+		".sha3sum [pattern] - show a deterministic SHA3-256 hash of database content\n"
 		".integrity - run SQLite integrity_check on the current database\n"
 		".intck - short alias for .integrity\n"
 		".lint - check foreign keys and suggest indexes\n"
@@ -1373,6 +1374,58 @@ def pale_dbtotxt(cursor):
 			offset += len(chunk)
 
 
+def pale_sha3sum(connection, pattern=""):
+	"""Print a deterministic SHA3-256 digest of the selected logical database content."""
+	pattern = pattern or "%"
+	hasher = hashlib.sha3_256()
+	objects = connection.execute(
+		"SELECT type, name, tbl_name, sql FROM main.sqlite_schema "
+		"WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' "
+		"AND (name LIKE ? OR tbl_name LIKE ?) ORDER BY type, name",
+		(pattern, pattern),
+	).fetchall()
+	if not objects:
+		print(f"sha3sum: {hasher.hexdigest()}")
+		return
+
+	def add(value):
+		if value is None:
+			encoded = b"N"
+		elif isinstance(value, bytes):
+			encoded = b"B" + value
+		elif isinstance(value, str):
+			encoded = b"T" + value.encode("utf-8")
+		elif isinstance(value, float):
+			encoded = b"F" + repr(value).encode("ascii")
+		else:
+			encoded = b"I" + str(value).encode("ascii")
+		hasher.update(len(encoded).to_bytes(8, "big"))
+		hasher.update(encoded)
+
+	for kind, name, table, sql in objects:
+		add(kind)
+		add(name)
+		add(table)
+		add(sql)
+		if kind != "table":
+			continue
+		try:
+			info = connection.execute(f"PRAGMA main.table_xinfo({quote_name(name)})").fetchall()
+			columns = [row[1] for row in info if row[6] == 0]
+			if not columns:
+				continue
+			column_sql = ", ".join(quote_name(column) for column in columns)
+			without_rowid = bool(re.search(r"\bWITHOUT\s+ROWID\b", sql or "", re.IGNORECASE))
+			order = " ORDER BY rowid" if not without_rowid else ""
+			rows = connection.execute(f"SELECT {column_sql} FROM {quote_name(name)}{order}")
+			for row in rows:
+				for value in row:
+					add(value)
+		except sqlite3.Error as error:
+			raise ValueError(f"cannot hash table '{name}': {error}") from error
+	print(f"sha3sum: {hasher.hexdigest()}")
+
+
 def schema_sql(database, kind, name, sql):
 	# Qualify the declared object, leaving its body and string literals intact.
 	space = r"(?:\s|/\*[\s\S]*?\*/|--[^\n]*(?:\n|$))+"
@@ -1946,6 +1999,18 @@ def main():
 					pale_dbtotxt(cursor)
 				except (OSError, ValueError) as error:
 					print(f"DB dump error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".sha3sum":
+				try:
+					if con is None:
+						raise ValueError("No database opened")
+					if len(argument.split()) > 1:
+						raise ValueError("Usage: .sha3sum [pattern]")
+					pale_sha3sum(con, argument)
+				except (ValueError, OSError, sqlite3.Error) as error:
+					print(f"SHA3 error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
