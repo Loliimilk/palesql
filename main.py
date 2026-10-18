@@ -1,4 +1,5 @@
 import sys
+import argparse
 import sqlite3
 import os
 import re
@@ -23,7 +24,7 @@ from pathlib import Path
 from contextlib import redirect_stdout
 
 
-PALESQL_VERSION = "0.14.0"
+PALESQL_VERSION = "0.15.0"
 PYTHON_VERSION = sys.version.split()[0]
 SQLITE_LIBRARY_VERSION = sqlite3.sqlite_version
 OUTPUT_MODES = ("list", "column", "table", "box", "csv", "tabs", "json", "jsonpretty", "line", "markdown", "quote")
@@ -437,6 +438,58 @@ def pale_open(name):
 	cursor = con.cursor()
 
 	return con, cursor
+
+
+def pale_open_readonly(name):
+	name = str(name)
+	if name == ":memory:":
+		raise ValueError("read-only mode requires a database file")
+	if name.lower().startswith("file:"):
+		uri = name if re.search(r"(?:[?&])mode=", name, re.IGNORECASE) else name + ("&" if "?" in name else "?") + "mode=ro"
+	else:
+		path = Path(name).expanduser()
+		if not path.name.lower().endswith(".db"):
+			path = path.with_name(path.name + ".db")
+		path = path.resolve()
+		uri = "file:" + str(path).replace("\\", "/") + "?mode=ro"
+	con = sqlite3.connect(uri, uri=True, isolation_level=None)
+	return con, con.cursor()
+
+
+def parse_cli_arguments(argv):
+	parser = argparse.ArgumentParser(
+		prog="palesql",
+		description="A tiny, lightweight SQLite CLI client written in Python.",
+		add_help=False,
+	)
+	parser.add_argument("--help", "-h", action="store_true", dest="show_help")
+	parser.add_argument("--version", action="store_true", dest="show_version")
+	parser.add_argument("--readonly", action="store_true", help="open the database read-only")
+	parser.add_argument("--bail", action="store_true", help="stop after the first SQL or script error")
+	parser.add_argument("--echo", action="store_true", help="echo commands read from startup scripts")
+	parser.add_argument("--init", metavar="FILE", help="run a SQL/dot-command file before input")
+	parser.add_argument("--batch", action="store_true", help="never enter interactive mode")
+	parser.add_argument("--interactive", action="store_true", help="enter interactive mode after startup commands")
+	parser.add_argument("--cmd", action="append", default=[], metavar="COMMAND", help="execute a SQL or dot-command")
+	parser.add_argument("--nullvalue", metavar="TEXT", help="text used for SQL NULL")
+	parser.add_argument("--separator", metavar="SEP", help="column separator (supports \\t, \\n, \\r)")
+	mode_group = parser.add_mutually_exclusive_group()
+	mode_group.add_argument("--csv", action="store_const", const="csv", dest="mode")
+	mode_group.add_argument("--json", action="store_const", const="json", dest="mode")
+	mode_group.add_argument("--table", action="store_const", const="table", dest="mode")
+	mode_group.add_argument("--box", action="store_const", const="box", dest="mode")
+	header_group = parser.add_mutually_exclusive_group()
+	header_group.add_argument("--header", action="store_true", dest="headers")
+	header_group.add_argument("--no-header", action="store_false", dest="headers")
+	parser.set_defaults(headers=None, mode=None)
+	parser.add_argument("database", nargs="?", help="database file or SQLite URI")
+	parser.add_argument("sql", nargs="?", help="SQL to execute, then exit")
+	return parser, parser.parse_args(argv)
+
+
+def print_cli_help(parser):
+	print(parser.format_help(), end="")
+	pale_help()
 
 
 def parse_single_argument(argument, usage):
@@ -2228,8 +2281,24 @@ def sql_context(sql):
 	return state, has_sql
 
 
-def main():
+def main(argv=None):
+	if argv is None:
+		argv = []
+	parser, cli = parse_cli_arguments(argv)
+	if cli.show_help:
+		print_cli_help(parser)
+		return 0
+	if cli.show_version:
+		pale_version()
+		return 0
+	if cli.readonly and cli.database is None:
+		print("Argument error: --readonly requires a database", file=sys.stderr)
+		return 2
 	interactive = sys.stdin.isatty() and sys.stdout.isatty()
+	if cli.interactive:
+		interactive = True
+	if cli.batch:
+		interactive = False
 	if interactive:
 		print(
 			f"\nhaiiiiiiiiii :3 rawr certified SQL CLI :p\n"
@@ -2280,6 +2349,36 @@ def main():
 	console = sys.stdout
 	output_file = None
 	once_file = None
+	if cli.headers is not None:
+		headers = cli.headers
+	if cli.mode is not None:
+		mode = cli.mode
+	if cli.nullvalue is not None:
+		nullvalue = cli.nullvalue
+	if cli.bail:
+		bail = True
+	if cli.echo:
+		echo = True
+	if cli.separator is not None:
+		try:
+			separators = parse_separators(cli.separator)
+			column_separator = separators[0]
+			row_separator = separators[1] if len(separators) == 2 else None
+		except ValueError as error:
+			print(f"Argument error: {error}", file=sys.stderr)
+			return 2
+	startup_queue = []
+	startup_exit = bool(cli.sql is not None or cli.cmd) and not cli.interactive
+	startup_commands = list(cli.cmd)
+	if cli.init:
+		startup_commands.insert(0, ".read " + json.dumps(str(Path(cli.init).expanduser().resolve())))
+	for startup_command in startup_commands:
+		if startup_command.lstrip().startswith(".") or sqlite3.complete_statement(startup_command):
+			startup_queue.append(startup_command)
+		else:
+			startup_queue.append(startup_command.rstrip() + ";")
+	if cli.sql is not None:
+		startup_queue.append(cli.sql if sqlite3.complete_statement(cli.sql) else cli.sql.rstrip() + ";")
 
 	def protected_backup_paths(include_sidecars=True):
 		paths = [active[0] for active in scripts]
@@ -2419,10 +2518,24 @@ def main():
 				failed = True
 		return ""
 
+	if cli.database:
+		try:
+			con, cursor = pale_open_readonly(cli.database) if cli.readonly else pale_open(cli.database)
+			connections.append((con, cursor))
+			active_connection = 0
+		except (OSError, ValueError, sqlite3.Error) as error:
+			print(f"Database error: {error}", file=sys.stderr)
+			failed = True
+
 	try:
 		while True:
-			if bail and failed and scripts:
-				scripts.clear()
+			if bail and failed:
+				if scripts:
+					scripts.clear()
+				if startup_queue:
+					startup_queue.clear()
+				if startup_exit and not scripts:
+					break
 				sql = ""
 			try:
 				if scripts:
@@ -2440,13 +2553,20 @@ def main():
 							print(f"SQL error: {path}:{last_line}: incomplete statement", file=sys.stderr)
 							failed = True
 							expert_options = None
-						sql = ""
+							sql = ""
 						continue
 				else:
 					source_context = None
-					with redirect_stdout(console):
-						prompt = (continue_prompt if sql else main_prompt) if interactive else ""
-						inp = cli_input(prompt, history) if interactive else input(prompt)
+					if startup_queue:
+						inp = startup_queue.pop(0)
+						if echo:
+							print(inp)
+					elif startup_exit:
+						break
+					else:
+						with redirect_stdout(console):
+							prompt = (continue_prompt if sql else main_prompt) if interactive else ""
+							inp = cli_input(prompt, history) if interactive else input(prompt)
 			except EOFError:
 				if sql_context(sql)[1] or sql_context(sql)[0] == "/*":
 					print("SQL error: incomplete statement at end of input", file=sys.stderr)
@@ -3365,6 +3485,8 @@ def main():
 					sql = ""
 				else:
 					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					if startup_exit:
+						failed = True
 				continue
 
 			# DB is opened
@@ -3685,6 +3807,8 @@ def main():
 
 			if command.startswith("."):
 				print(f"Unknown command: {command}", file=sys.stderr if output_file else sys.stdout)
+				if startup_exit:
+					failed = True
 				continue
 
 			sql += raw_input + "\n"
@@ -3715,4 +3839,4 @@ def main():
 
 
 if __name__ == "__main__":
-	sys.exit(main())
+	sys.exit(main(sys.argv[1:]))
