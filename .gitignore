@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-venv/
-.env
-test_main.py
-*.sql
-
-*.db
-*.exe
