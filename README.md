@@ -83,6 +83,9 @@ value SQLite actually applies, including when a transaction prevents a change.
 
 `.journal_mode` reads the current journal mode. `.journal_mode delete|truncate|persist|memory|wal|off` requests a mode and prints the value SQLite actually applies; some modes depend on the database type and locking environment.
 
+`.busy_timeout <milliseconds>` is an alias for `.timeout <milliseconds>` and
+sets SQLite's busy timeout on the current connection.
+
 ## Tests
 
 ```text

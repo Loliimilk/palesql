@@ -90,6 +90,7 @@ def pale_help():
 		".headers on|off - show or hide column names in SQL results\n"
 		".changes on|off - show changed row counts after INSERT/UPDATE/DELETE\n"
 		".timeout <milliseconds> - set the SQLite busy timeout\n"
+		".busy_timeout <milliseconds> - alias for .timeout\n"
 		".bail on|off - stop .read scripts after the first error\n"
 		".echo on|off - show lines executed from .read scripts\n"
 		".parameter init|set|unset|list|clear - manage SQL parameter bindings\n"
@@ -1431,7 +1432,7 @@ def main():
 				changes = argument.lower() == "on"
 				continue
 
-			if command == ".timeout":
+			if command in (".timeout", ".busy_timeout"):
 				if con is None:
 					print("No database opened", file=sys.stderr if output_file else sys.stdout)
 					failed = True
@@ -1442,7 +1443,7 @@ def main():
 						raise ValueError
 					con.execute(f"PRAGMA busy_timeout = {milliseconds}")
 				except ValueError:
-					print("Usage: .timeout <milliseconds> (non-negative integer)", file=sys.stderr if output_file else sys.stdout)
+					print(f"Usage: {command} <milliseconds> (non-negative integer)", file=sys.stderr if output_file else sys.stdout)
 					continue
 				except sqlite3.Error as error:
 					print(f"Timeout error: {error}", file=sys.stderr)
