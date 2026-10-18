@@ -86,6 +86,7 @@ def pale_help():
 		".parameter init|set|unset|list|clear - manage SQL parameter bindings\n"
 		".limit [name] [value] - view or change SQLite runtime limits\n"
 		".timer on|off - show SQL execution time\n"
+		".stats on|off - show SQL execution statistics\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -423,7 +424,7 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 		for row in rows:
 			emit(separator.join(format_value(value) for value in row))
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False, stats=False):
 	started = time.perf_counter()
 	try:
 		if parameters:
@@ -431,14 +432,20 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 		else:
 			cursor.execute(sql)
 
+		result_count = 0
 		if cursor.description:
 			names = [column[0] for column in cursor.description]
 			newline = "\r\n" if crlf and not sys.stdout.isatty() else "\n"
-			print_results(names, cursor.fetchall(), headers, mode, nullvalue, column_separator, row_separator, column_widths, newline)
+			rows = cursor.fetchall()
+			result_count = len(rows)
+			print_results(names, rows, headers, mode, nullvalue, column_separator, row_separator, column_widths, newline)
 		elif changes and cursor.rowcount >= 0:
 			print(f"changes: {cursor.rowcount}")
 		if timer:
 			print(f"Time: {time.perf_counter() - started:.6f} seconds")
+		if stats:
+			changed_count = cursor.rowcount if cursor.rowcount >= 0 else 0
+			print(f"Stats: rows={result_count} changes={changed_count} total_changes={cursor.connection.total_changes}")
 		return True
 
 	except sqlite3.Error as error:
@@ -837,6 +844,7 @@ def main():
 	echo = False
 	parameters = {}
 	timer = False
+	stats = False
 	column_separator = None
 	row_separator = None
 	column_widths = ()
@@ -868,7 +876,7 @@ def main():
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
 				with redirect_stdout(once_file if once_file is not None else sys.stdout):
-					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer)
+					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats)
 				if not success:
 					failed = True
 					if bail and scripts:
@@ -1298,6 +1306,13 @@ def main():
 					print("Usage: .timer on|off", file=sys.stderr if output_file else sys.stdout)
 					continue
 				timer = argument.lower() == "on"
+				continue
+
+			if command == ".stats":
+				if argument.lower() not in ("on", "off"):
+					print("Usage: .stats on|off", file=sys.stderr if output_file else sys.stdout)
+					continue
+				stats = argument.lower() == "on"
 				continue
 
 			if command == ".clear":
