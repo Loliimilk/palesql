@@ -1,84 +1,102 @@
 # PaleSQL
 
-A tiny, lightweight SQLite CLI client written in Python.
-
-## Implemented
-
-PaleSQL supports:
-
-* regular SQL through `sqlite3`;
-* multiline queries and multiple SQL statements;
-* explicit `BEGIN`, `COMMIT`, and `ROLLBACK` transactions;
-* opening databases, read only mode, URI databases, and multiple connections;
-* `list`, `column`, `table`, `box`, `csv`, `tabs`, `json`, `jsonpretty`, `line`, `markdown`, and `quote` output modes;
-* import, export, dump, backup, restore, save, clone, and SQLite Archive;
-* `.read`, `.output`, `.once`, command history, and the continuation prompt;
-* SQLite diagnostics, integrity checks, recovery, `.expert`, trace, log, timer, and statistics;
-* safe mode, extension support, and compatibility wrappers for Python API limitations;
-* CLI arguments `--help`, `--version`, `--readonly`, `--cmd`, `--init`, `--batch`, `--interactive`, `--bail`, `--echo`, `--csv`, `--json`, `--table`, `--box`, `--header`, `--no-header`, `--separator`, and `--nullvalue`.
+PaleSQL is a lightweight SQLite command line client written in Python. It runs regular SQL and adds practical dot commands for inspecting databases, formatting results, working with files, diagnostics, and session settings.
 
 ## Requirements
 
-Python 3.11 or newer with the `sqlite3` module is required.
+PaleSQL requires Python 3.11 or newer with the standard `sqlite3` module. It has no third party runtime dependencies.
 
-PaleSQL and its tests use only the Python standard library at runtime. No third party runtime packages are required. The dependency policy is recorded in `requirements.txt`.
+## Installation
 
-## Running PaleSQL
-
-```text
-python -m palesql
-python -m palesql database.db
-python -m palesql database.db "SELECT * FROM users;"
-python -m palesql --readonly database.db
-python -m palesql --json database.db "SELECT * FROM users;"
-```
-
-`python main.py` remains available for existing scripts. To install a `palesql` command in the active Python environment:
+Install from a local checkout:
 
 ```text
 pip install .
+```
+
+This creates the `palesql` command in the active Python environment. The legacy launcher remains available with `python main.py`.
+
+## Quick start
+
+Open a database interactively:
+
+```text
 palesql database.db
 ```
 
-## Tests
-
-Run the standard test suite with Python:
+Run one query and exit:
 
 ```text
-python -m unittest
+palesql database.db "SELECT id, username FROM users;"
 ```
 
-Run the detailed test report with the name of every check:
+Start without installation:
+
+```text
+python -m palesql database.db
+python -m palesql database.db "SELECT * FROM users;"
+```
+
+Useful first commands inside PaleSQL are `.tables`, `.schema users`, `.columns users`, `.indexes users`, `.help`, and `.quit`.
+
+## Output modes
+
+Use `.mode` to select the result format:
+
+```text
+.headers on
+.mode table
+SELECT * FROM users;
+
+.mode jsonpretty
+SELECT id, username FROM users;
+
+.mode csv
+.output users.csv
+SELECT id, username FROM users;
+.output
+```
+
+Available modes are `list`, `column`, `table`, `box`, `csv`, `tabs`, `json`, `jsonpretty`, `line`, `markdown`, and `quote`.
+
+## Batch use
+
+PaleSQL can execute SQL or dot commands without opening an interactive prompt:
+
+```text
+palesql --json --header database.db "SELECT * FROM users;"
+palesql --cmd ".headers on" --cmd ".mode csv" database.db "SELECT * FROM users;"
+palesql --init setup.sql database.db "SELECT count(*) FROM users;"
+palesql --readonly database.db "SELECT * FROM users;"
+```
+
+Use `--bail` to stop after the first script or SQL error. The process exits with a nonzero status when batch or startup execution fails.
+
+## Tests
+
+Run the public automated test suite:
 
 ```text
 python -m tests
 ```
 
-The test database is created in a temporary directory. Persistent databases and test data are not written to the repository.
-
-## Stress test
-
-The stress test runs separately and is not included in the regular automated suite:
+The suite creates temporary databases and removes them when finished. A separate stress test can exercise larger data sets:
 
 ```text
 python tests/stress.py
 python tests/stress.py --rows 50000 --iterations 3
 ```
 
-The script creates a temporary database, inserts the requested number of rows, checks every output mode, JSON, BLOB, `NULL`, line breaks, indexes, and the integrity check. The temporary database is removed after the run.
+Pass `--database stress.db` to retain the stress-test database for manual inspection.
 
-To keep the database for manual inspection:
+## Limitations
 
-```text
-python tests/stress.py --rows 50000 --database stress.db
-```
+PaleSQL uses Python's built-in SQLite library, so features exposed by SQLite extensions or low level C APIs depend on the Python and SQLite build in use. Commands such as `.scanstats`, `.dbconfig`, `.filectrl`, `.unmodule`, and `.vfsinfo` may report that the required API is unavailable.
 
-## Structure
+`.expert` is a bounded Python index advisor. It is not the native `sqlite3_expert` extension. Loading extensions and running shell commands can execute external code, so use `.safe on` when scripts should block those operations.
 
-* `palesql/` is the application package. `cli.py` owns the command loop, `state.py` owns session state, `database.py`, `sql.py`, and `output.py` own their respective layers.
-* `palesql/commands/` groups core, schema, files, settings, diagnostics, connections, and system commands.
-* `palesql/__main__.py` enables `python -m palesql`.
-* `main.py` is a small compatibility launcher for existing scripts.
-* `tests/` contains unit tests, integration tests, fixtures, and the separate stress test.
-* `pyproject.toml` defines the installable package and `palesql` console command.
-* `requirements.txt` documents that there are no external runtime dependencies.
+## Help and license
+
+Run `palesql --help` for command line options, or `.help` inside PaleSQL for the complete dot-command reference.
+
+PaleSQL is released under the [MIT License](LICENSE).

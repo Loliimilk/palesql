@@ -109,17 +109,52 @@ class CommandLineIntegrationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("readonly", (result.stdout + result.stderr).lower())
 
-    def test_init_script_finishes_before_the_startup_query_runs(self):
+    def test_nested_read_resolves_child_paths_from_the_parent_script(self):
         with tempfile.TemporaryDirectory() as directory:
-            script = Path(directory) / "startup.sql"
-            script.write_text(
-                "CREATE TABLE startup_rows(value TEXT);\n"
-                "INSERT INTO startup_rows VALUES ('ready');\n",
+            root = Path(directory)
+            child = root / "child.sql"
+            child.write_text(
+                "CREATE TABLE nested_rows(value TEXT);\n"
+                "INSERT INTO nested_rows VALUES ('nested');\n",
                 encoding="utf-8",
             )
-            result = run_package("--init", script, ":memory:", "SELECT value FROM startup_rows;")
+            parent = root / "parent.sql"
+            parent.write_text(".read child.sql\n", encoding="utf-8")
+            result = run_package("--init", parent, ":memory:", "SELECT value FROM nested_rows;")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "ready")
+        self.assertEqual(result.stdout.strip(), "nested")
+
+    def test_output_redirect_writes_query_results_to_the_selected_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "query result.txt"
+            result = run_package(
+                "--cmd", f'.output "{output_path}"',
+                ":memory:",
+                "SELECT 'saved' AS value;",
+            )
+            saved = output_path.read_text(encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(saved, "saved\n")
+
+    def test_missing_init_file_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_package("--init", Path(directory) / "missing.sql", ":memory:")
+        message = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Read error:", message)
+        self.assertNotIn("Traceback", message)
+
+    def test_cli_connections_are_independent(self):
+        result = run_package(
+            "--cmd", ".connection new",
+            "--cmd", "CREATE TABLE secondary_only(value TEXT);",
+            "--cmd", ".connection use 1",
+            ":memory:",
+            "SELECT count(*) FROM sqlite_schema WHERE name = 'secondary_only';",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.endswith("0\n"), result.stdout)
 
 
 if __name__ == "__main__":
