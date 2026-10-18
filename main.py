@@ -446,6 +446,19 @@ def pale_help():
 		".open <database> - open or create database\n"
 		".cd <directory> - change PaleSQL working directory\n"
 		".pwd - show PaleSQL working directory\n"
+		".history - show recent SQL and dot commands\n"
+		".clearhistory - clear command history\n"
+		".status - show a compact database and CLI status\n"
+		".describe <table> - show extended table information\n"
+		".memory - switch to a new in-memory database\n"
+		".reopen - reopen the current database file\n"
+		".readonly <file> - open a database read-only\n"
+		".find <text> - search text columns in all tables\n"
+		".count [table] - count rows in one table or all tables\n"
+		".tablesize [table] - show table row counts and file size\n"
+		".vacuum - compact the current database\n"
+		".schemajson - show the schema as JSON\n"
+		".watch <seconds> <SQL> - repeat a SQL query until interrupted\n"
 		".shell <command> - execute a command through the system shell\n"
 		".system <command> - alias for .shell (potentially dangerous)\n"
 		".safe on|off - block shell, extension, and file operations\n"
@@ -1932,6 +1945,144 @@ def pale_foreignkeys(cursor, table_name):
 		print(f"{key_id:<5} | {seq:<5} | {table:<20} | {from_column:<20} | {to_column:<20} | {on_update:<12} | {on_delete:<12} | {match}")
 
 
+def pale_status(connection, cursor, output_mode, show_headers):
+	main = next((row for row in get_databases(cursor) if row[1] == "main"), None)
+	database = main[2] if main and main[2] else ":memory:"
+	foreign_keys = connection.execute("PRAGMA foreign_keys;").fetchone()[0]
+	journal_mode = connection.execute("PRAGMA journal_mode;").fetchone()[0]
+	print(f"database: {database}")
+	print(f"SQLite version: {sqlite3.sqlite_version}")
+	print(f"foreign_keys: {'on' if foreign_keys else 'off'}")
+	print(f"journal_mode: {journal_mode}")
+	print(f"output mode: {output_mode}")
+	print(f"headers: {'on' if show_headers else 'off'}")
+	print(f"transaction state: {'active' if connection.in_transaction else 'inactive'}")
+
+
+def pale_describe(cursor, table_name):
+	table = find_table(cursor, table_name)
+	if table is None:
+		print(f"Table '{table_name}' not found")
+		return
+	database, name = table
+	objects = database_objects(cursor)
+	create_sql = next((row[4] for row in objects if row[0] == database and row[2] == name and row[1] == "table"), None)
+	print(f"Table: {object_label(database, name)}")
+	print("Columns:")
+	for cid, column, column_type, not_null, default, primary_key, hidden in table_pragma(cursor, database, "table_xinfo", name):
+		flags = []
+		if not_null:
+			flags.append("NOT NULL")
+		if primary_key:
+			flags.append(f"PK {primary_key}")
+		if default is not None:
+			flags.append(f"DEFAULT {default}")
+		if hidden:
+			flags.append("hidden")
+		details = " " + " ".join(flags) if flags else ""
+		print(f"  {column} {column_type or '""'}{details}".rstrip())
+	print("Foreign keys:")
+	foreign_keys = table_pragma(cursor, database, "foreign_key_list", name)
+	if foreign_keys:
+		for key_id, seq, target, source, destination, on_update, on_delete, match in foreign_keys:
+			print(f"  {source} -> {target}.{destination or '(rowid)'} ON UPDATE {on_update} ON DELETE {on_delete}")
+	else:
+		print("  none")
+	print("Indexes:")
+	indexes = [row for row in objects if row[0] == database and row[1] == "index" and identifier_key(row[3]) == identifier_key(name)]
+	if indexes:
+		for _, _, index_name, _, sql in indexes:
+			print(f"  {index_name}{' (implicit)' if sql is None else ''}")
+	else:
+		print("  none")
+	print("CREATE SQL:")
+	print(f"  {create_sql or '(unavailable)'}")
+
+
+def pale_schemajson(cursor):
+	objects = []
+	for database, kind, name, table, sql in database_objects(cursor):
+		objects.append({"database": database, "type": kind, "name": name, "table": table, "sql": sql})
+	print(json.dumps(objects, ensure_ascii=False, indent=2))
+
+
+def pale_find(cursor, needle):
+	needle = str(needle)
+	matches = []
+	shadows = shadow_tables(cursor)
+	for database, kind, name, table, sql in database_objects(cursor, "table"):
+		if name.startswith("sqlite_") or (database, name) in shadows:
+			continue
+		columns = [row[1] for row in table_pragma(cursor, database, "table_xinfo", name) if not row[6] and (not row[2] or "CHAR" in row[2].upper() or "TEXT" in row[2].upper() or "CLOB" in row[2].upper())]
+		if not columns:
+			continue
+		select = ", ".join(quote_name(column) for column in columns)
+		try:
+			cursor.execute(f"SELECT {select} FROM {quote_name(database)}.{quote_name(name)}")
+			for row in cursor.fetchall():
+				for column, value in zip(columns, row):
+					if value is not None and needle.casefold() in str(value).casefold():
+						matches.append((object_label(database, name), column, value))
+		except sqlite3.Error:
+			continue
+	if matches:
+		for table, column, value in matches:
+			print(f"{table}.{column}: {value}")
+	else:
+		print("No matches")
+
+
+def pale_count(cursor, table_name=""):
+	if table_name:
+		table = find_table(cursor, table_name)
+		if table is None:
+			print(f"Table '{table_name}' not found")
+			return
+		database, name = table
+		count = cursor.execute(f"SELECT count(*) FROM {quote_name(database)}.{quote_name(name)}").fetchone()[0]
+		print(f"{object_label(database, name)}: {count}")
+		return
+	rows = []
+	shadows = shadow_tables(cursor)
+	for database, kind, name, table, sql in database_objects(cursor, "table"):
+		if name.startswith("sqlite_") or (database, name) in shadows:
+			continue
+		count = cursor.execute(f"SELECT count(*) FROM {quote_name(database)}.{quote_name(name)}").fetchone()[0]
+		rows.append((object_label(database, name), count))
+	if rows:
+		for name, count in rows:
+			print(f"{name}: {count}")
+	else:
+		print("No tables found")
+
+
+def pale_tablesize(cursor, table_name=""):
+	if table_name:
+		table = find_table(cursor, table_name)
+		if table is None:
+			print(f"Table '{table_name}' not found")
+			return
+		database, name = table
+		count = cursor.execute(f"SELECT count(*) FROM {quote_name(database)}.{quote_name(name)}").fetchone()[0]
+		print(f"{object_label(database, name)}: {count} rows")
+		return
+	presented = False
+	for database, kind, name, table, sql in database_objects(cursor, "table"):
+		if name.startswith("sqlite_"):
+			continue
+		count = cursor.execute(f"SELECT count(*) FROM {quote_name(database)}.{quote_name(name)}").fetchone()[0]
+		print(f"{object_label(database, name)}: {count} rows")
+		presented = True
+	for _, database, file in get_databases(cursor):
+		if file:
+			try:
+				print(f"{database} file size: {os.path.getsize(file)} bytes")
+			except OSError:
+				print(f"{database} file size: unavailable")
+	if not presented:
+		print("No tables found")
+
+
 def sql_context(sql):
 	state, has_sql, index = "", False, 0
 	while index < len(sql):
@@ -2005,6 +2156,7 @@ def main():
 	www_pending = False
 	testcase_name = None
 	testcase_output = io.StringIO()
+	history = []
 	main_prompt = "PaleSQL: "
 	continue_prompt = "    ...: "
 	failed = False
@@ -2175,6 +2327,10 @@ def main():
 					print("SQL error: incomplete statement at end of input", file=sys.stderr)
 					return 1
 				break
+			if inp.strip():
+				history.append(inp.rstrip("\r\n"))
+				if len(history) > 1000:
+					del history[:-1000]
 			if sql_context(sql)[0] not in ("", "--"):
 				sql += inp + "\n"
 				sql = run_sql(sql)
@@ -2249,12 +2405,31 @@ def main():
 					failed = True
 				continue
 
-			if safe_mode and command in (".shell", ".system", ".load", ".output", ".once", ".archive", ".backup", ".restore", ".save", ".clone", ".import", ".filectrl", ".unmodule", ".imposter", ".session", ".www"):
+			if safe_mode and command in (".shell", ".system", ".load", ".output", ".once", ".archive", ".backup", ".restore", ".save", ".clone", ".import", ".filectrl", ".unmodule", ".imposter", ".session", ".www", ".vacuum"):
 				if safe_nonce is None:
 					print(f"Safe mode: {command} is disabled", file=sys.stderr)
 					failed = True
 					continue
 				safe_nonce = None
+
+			if command == ".history":
+				if argument:
+					print("Usage: .history", file=sys.stderr if output_file else sys.stdout)
+					continue
+				if history:
+					for number, entry in enumerate(history, 1):
+						print(f"{number:4d}  {entry}")
+				else:
+					print("No history")
+				continue
+
+			if command == ".clearhistory":
+				if argument:
+					print("Usage: .clearhistory", file=sys.stderr if output_file else sys.stdout)
+					continue
+				history.clear()
+				print("History cleared")
+				continue
 
 			if command in (".output", ".once"):
 				try:
@@ -3047,6 +3222,73 @@ def main():
 
 			# DB is opened
 
+			if command == ".describe":
+				if not argument:
+					print("Usage: .describe <table>", file=sys.stderr if output_file else sys.stdout)
+					continue
+				pale_describe(cursor, argument)
+				continue
+
+			if command == ".find":
+				if not argument:
+					print("Usage: .find <text>", file=sys.stderr if output_file else sys.stdout)
+					continue
+				pale_find(cursor, argument[1:-1] if len(argument) >= 2 and argument[0] in ("'", '"') and argument[-1] == argument[0] else argument)
+				continue
+
+			if command == ".count":
+				pale_count(cursor, argument)
+				continue
+
+			if command == ".tablesize":
+				pale_tablesize(cursor, argument)
+				continue
+
+			if command == ".schemajson":
+				if argument:
+					print("Usage: .schemajson", file=sys.stderr if output_file else sys.stdout)
+					continue
+				pale_schemajson(cursor)
+				continue
+
+			if command == ".vacuum":
+				if argument:
+					print("Usage: .vacuum", file=sys.stderr if output_file else sys.stdout)
+					continue
+				try:
+					con.execute("VACUUM")
+					print("Vacuum complete")
+				except sqlite3.Error as error:
+					print(f"Vacuum error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".watch":
+				match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s+([\s\S]+)", argument)
+				if not match:
+					print("Usage: .watch <seconds> <SQL>", file=sys.stderr if output_file else sys.stdout)
+					continue
+				interval = float(match[1])
+				if interval < 0:
+					print("Watch interval must not be negative", file=sys.stderr)
+					failed = True
+					continue
+				statement = match[2].strip()
+				if not statement.endswith(";"):
+					statement += ";"
+				try:
+					while True:
+						success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats, eqp, explain, scanstats, log_callback)
+						if not success:
+							failed = True
+							break
+						if not interactive:
+							break
+						time.sleep(interval)
+				except KeyboardInterrupt:
+					print("Watch stopped")
+				continue
+
 			if command == ".auth":
 				if argument.lower() not in ("on", "off"):
 					print("Usage: .auth on|off", file=sys.stderr if output_file else sys.stdout)
@@ -3058,6 +3300,103 @@ def main():
 				except (ValueError, sqlite3.Error) as error:
 					print(f"Authorizer error: {error}", file=sys.stderr)
 					failed = True
+				continue
+
+			if command == ".memory":
+				if argument:
+					print("Usage: .memory", file=sys.stderr if output_file else sys.stdout)
+					continue
+				try:
+					new_con = sqlite3.connect(":memory:", isolation_level=None)
+					new_cursor = new_con.cursor()
+					if con is not None:
+						clear_trace()
+						old_con = con
+						connections[active_connection] = (new_con, new_cursor)
+						con, cursor = new_con, new_cursor
+						old_con.close()
+					else:
+						connections.append((new_con, new_cursor))
+						active_connection = len(connections) - 1
+						con, cursor = new_con, new_cursor
+					if auth_enabled:
+						set_authorizer(True)
+					sql = ""
+					print("Opened :memory:")
+				except sqlite3.Error as error:
+					print(f"Memory database error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".reopen":
+				if argument:
+					print("Usage: .reopen", file=sys.stderr if output_file else sys.stdout)
+					continue
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					continue
+				try:
+					main_row = next((row for row in get_databases(cursor) if row[1] == "main"), None)
+					if not main_row or not main_row[2]:
+						raise ValueError("cannot reopen an in-memory database")
+					new_con = sqlite3.connect(main_row[2], isolation_level=None)
+					new_cursor = new_con.cursor()
+					clear_trace()
+					old_con = con
+					connections[active_connection] = (new_con, new_cursor)
+					con, cursor = new_con, new_cursor
+					old_con.close()
+					if auth_enabled:
+						set_authorizer(True)
+					sql = ""
+					print(f"Reopened {main_row[2]}")
+				except (OSError, ValueError, sqlite3.Error) as error:
+					print(f"Reopen error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".readonly":
+				try:
+					values = shlex.split(argument) if argument[:1] in ("'", '"') else ([argument] if argument else [])
+					if len(values) != 1:
+						raise ValueError("Usage: .readonly <file>")
+					path = Path(values[0]).expanduser().resolve()
+					uri = "file:" + str(path).replace("\\", "/") + "?mode=ro"
+					new_con = sqlite3.connect(uri, uri=True, isolation_level=None)
+					new_cursor = new_con.cursor()
+					if con is not None:
+						clear_trace()
+						old_con = con
+						connections[active_connection] = (new_con, new_cursor)
+						con, cursor = new_con, new_cursor
+						old_con.close()
+					else:
+						connections.append((new_con, new_cursor))
+						active_connection = len(connections) - 1
+						con, cursor = new_con, new_cursor
+					if auth_enabled:
+						set_authorizer(True)
+					sql = ""
+					print(f"Opened read-only: {path}")
+				except (OSError, ValueError, sqlite3.Error) as error:
+					print(f"Read-only error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".status":
+				if argument:
+					print("Usage: .status", file=sys.stderr if output_file else sys.stdout)
+					continue
+				if con is None:
+					print("database: none")
+					print(f"SQLite version: {sqlite3.sqlite_version}")
+					print("foreign_keys: unavailable")
+					print("journal_mode: unavailable")
+					print(f"output mode: {mode}")
+					print(f"headers: {'on' if headers else 'off'}")
+					print("transaction state: inactive")
+				else:
+					pale_status(con, cursor, mode, headers)
 				continue
 
 			if command == ".imposter":
