@@ -454,6 +454,8 @@ def pale_help():
 		".imposter <index> <table> - create a temporary index diagnostic snapshot\n"
 		".session ... - manage a text changeset session (Python fallback)\n"
 		".www - show the next SQL result in a browser\n"
+		".testcase NAME - begin a CLI output test case\n"
+		".check GLOB - check testcase output against a glob pattern\n"
 		".connection new|list|use N|close N - manage independent SQLite connections\n"
 		".connections - list independent SQLite connections\n"
 		".close - close current database\n"
@@ -2001,6 +2003,8 @@ def main():
 	auth_enabled = False
 	session_state = None
 	www_pending = False
+	testcase_name = None
+	testcase_output = io.StringIO()
 	main_prompt = "PaleSQL: "
 	continue_prompt = "    ...: "
 	failed = False
@@ -2111,14 +2115,20 @@ def main():
 		for index, char in enumerate(buffer):
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
-				web_output = io.StringIO() if www_pending else None
-				with redirect_stdout(web_output if web_output is not None else (once_file if once_file is not None else sys.stdout)):
+				capture_output = io.StringIO() if (www_pending or testcase_name is not None) else None
+				with redirect_stdout(capture_output if capture_output is not None else (once_file if once_file is not None else sys.stdout)):
 					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats, eqp, explain, scanstats, log_callback)
-				if web_output is not None:
+				if capture_output is not None:
+					captured = capture_output.getvalue()
+					if testcase_name is not None:
+						testcase_output.write(captured)
+					if testcase_name is not None and not www_pending:
+						write_result(captured)
+				if www_pending:
 					www_pending = False
 					if success:
 						try:
-							pale_www(web_output.getvalue())
+							pale_www(captured)
 						except OSError as error:
 							print(f"WWW error: {error}", file=sys.stderr)
 							failed = True
@@ -2213,6 +2223,30 @@ def main():
 					continue
 				www_pending = True
 				print("The next SQL result will open in a browser")
+				continue
+
+			if command == ".testcase":
+				if not argument:
+					print("Usage: .testcase NAME", file=sys.stderr if output_file else sys.stdout)
+					continue
+				testcase_name = argument
+				testcase_output = io.StringIO()
+				continue
+
+			if command == ".check":
+				if not argument:
+					print("Usage: .check GLOB", file=sys.stderr if output_file else sys.stdout)
+					continue
+				if testcase_name is None:
+					print("Check error: no testcase is active", file=sys.stderr)
+					failed = True
+					continue
+				pattern = argument[1:-1] if len(argument) >= 2 and argument[0] in ("'", '"') and argument[-1] == argument[0] else argument
+				if fnmatch.fnmatchcase(testcase_output.getvalue().rstrip("\r\n"), pattern):
+					print("ok")
+				else:
+					print(f"Check failed for testcase {testcase_name}", file=sys.stderr)
+					failed = True
 				continue
 
 			if safe_mode and command in (".shell", ".system", ".load", ".output", ".once", ".archive", ".backup", ".restore", ".save", ".clone", ".import", ".filectrl", ".unmodule", ".imposter", ".session", ".www"):
