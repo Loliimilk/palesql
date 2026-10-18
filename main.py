@@ -521,13 +521,15 @@ def expert_suggestions(cursor, sql):
 	reserved = {"where", "join", "on", "order", "group", "having", "limit", "left", "right", "inner", "outer", "cross", "union"}
 	pattern = r"\b(?:FROM|JOIN)\s+([\w\"`\[\].]+)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?"
 	for match in re.finditer(pattern, sql, re.IGNORECASE):
-		table_name = expert_identifier(match.group(1).split(".")[-1])
+		parts = match.group(1).split(".")
+		database_hint = expert_identifier(parts[-2]) if len(parts) > 1 else None
+		table_name = expert_identifier(parts[-1])
 		alias = match.group(2)
 		if alias and alias.lower() in reserved:
 			alias = None
-		found = find_table(cursor, table_name)
+		found = next((row for row in database_objects(cursor, "table") if not row[2].startswith("sqlite_") and identifier_key(row[2]) == identifier_key(table_name) and (database_hint is None or identifier_key(row[0]) == identifier_key(database_hint))), None)
 		if found and found[0] != "temp":
-			database, actual_name = found
+			database, _, actual_name, _, _ = found
 			tables[actual_name.lower()] = {"database": database, "name": actual_name, "aliases": {actual_name.lower(), (alias or actual_name).lower()}, "columns": set()}
 			if alias:
 				tables[actual_name.lower()]["aliases"].add(alias.lower())
@@ -573,7 +575,7 @@ def expert_suggestions(cursor, sql):
 		if any(tuple(identifier_key(column) for column in index[:len(columns)]) == tuple(identifier_key(column) for column in columns) for index in existing):
 			continue
 		index_name = "idx_expert_" + re.sub(r"[^A-Za-z0-9_]+", "_", table["name"] + "_" + "_".join(columns)).strip("_")
-		suggestions.append((index_name, table["name"], columns))
+		suggestions.append((index_name, table["database"], table["name"], columns))
 	return plan, suggestions
 
 def parse_import_arguments(argument):
@@ -1452,9 +1454,10 @@ def main():
 						print(row[3])
 					if suggestions:
 						print("Suggested indexes:")
-						for index_name, table_name, columns in suggestions:
+						for index_name, database_name, table_name, columns in suggestions:
 							column_sql = ", ".join(quote_name(column) for column in columns)
-							print(f"CREATE INDEX IF NOT EXISTS {quote_name(index_name)} ON {quote_name(table_name)} ({column_sql});")
+							table_sql = quote_name(table_name) if database_name == "main" else f"{quote_name(database_name)}.{quote_name(table_name)}"
+							print(f"CREATE INDEX IF NOT EXISTS {quote_name(index_name)} ON {table_sql} ({column_sql});")
 					else:
 						print("No useful indexes suggested")
 				except (OSError, ValueError, sqlite3.Error) as error:
