@@ -447,6 +447,7 @@ def pale_help():
 		".shell <command> - execute a command through the system shell\n"
 		".system <command> - alias for .shell (potentially dangerous)\n"
 		".safe on|off - block shell, extension, and file operations\n"
+		".auth on|off - show SQLite authorizer callbacks\n"
 		".connection new|list|use N|close N - manage independent SQLite connections\n"
 		".connections - list independent SQLite connections\n"
 		".close - close current database\n"
@@ -1865,6 +1866,7 @@ def main():
 	column_widths = ()
 	crlf = False
 	safe_mode = False
+	auth_enabled = False
 	main_prompt = "PaleSQL: "
 	continue_prompt = "    ...: "
 	failed = False
@@ -1903,6 +1905,16 @@ def main():
 		if not hasattr(con, "set_trace_callback"):
 			raise ValueError("this SQLite connection does not support tracing")
 		con.set_trace_callback(trace_callback)
+
+	def authorizer_callback(action, arg1, arg2, database, source):
+		if auth_enabled:
+			print(f"Authorizer: action={action} arg1={arg1 or ''} arg2={arg2 or ''} database={database or ''} source={source or ''}")
+		return sqlite3.SQLITE_OK
+
+	def set_authorizer(enabled):
+		if con is None or not hasattr(con, "set_authorizer"):
+			raise ValueError("this Python sqlite3 does not support authorizer callbacks")
+		con.set_authorizer(authorizer_callback if enabled else None)
 
 	def clear_trace():
 		nonlocal trace_file, trace_mode
@@ -2835,6 +2847,19 @@ def main():
 				continue
 
 			# DB is opened
+
+			if command == ".auth":
+				if argument.lower() not in ("on", "off"):
+					print("Usage: .auth on|off", file=sys.stderr if output_file else sys.stdout)
+					continue
+				try:
+					auth_enabled = argument.lower() == "on"
+					set_authorizer(auth_enabled)
+					print(f"Authorizer {'on' if auth_enabled else 'off'}")
+				except (ValueError, sqlite3.Error) as error:
+					print(f"Authorizer error: {error}", file=sys.stderr)
+					failed = True
+				continue
 
 			if command == ".tables":
 				tables = pale_tables(cursor, argument or "%")
