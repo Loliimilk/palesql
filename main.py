@@ -23,7 +23,7 @@ from pathlib import Path
 from contextlib import redirect_stdout
 
 
-PALESQL_VERSION = "0.12.0"
+PALESQL_VERSION = "0.13.0"
 PYTHON_VERSION = sys.version.split()[0]
 SQLITE_LIBRARY_VERSION = sqlite3.sqlite_version
 OUTPUT_MODES = ("list", "column", "table", "box", "csv", "tabs", "json", "jsonpretty", "line", "markdown", "quote")
