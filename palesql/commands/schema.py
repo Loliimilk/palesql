@@ -222,7 +222,8 @@ def pale_incremental_integrity_check(cursor):
         cursor.execute("SELECT name FROM main.sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
         issues = []
         for table, in cursor.fetchall():
-            cursor.execute(f"PRAGMA quick_check('{table.replace("'", "''")}')")
+            escaped_table = table.replace("'", "''")
+            cursor.execute(f"PRAGMA quick_check('{escaped_table}')")
             issues.extend(result[0] for result in cursor.fetchall() if result and result[0] != "ok")
     except sqlite3.Error as error:
         raise ValueError(f"incremental integrity check failed: {error}") from error
