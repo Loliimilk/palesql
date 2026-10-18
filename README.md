@@ -68,47 +68,8 @@ callback; `.trace stdout` and `.trace stderr` select an explicit stream, while a
 quoted path writes the trace to a UTF-8 file. Python's callback receives the SQL
 text with bound values expanded by SQLite where the library provides it.
 
-`.log stdout`, `.log stderr`, and `.log <file>` record SQLite errors that PaleSQL
-receives; `.log off` disables it. Python's standard `sqlite3` module does not
-expose SQLite's process-wide logging hook, so this is a client-level fallback.
-
-`.dbconfig` lists the `sqlite3_db_config` options exposed by the current Python
-build. `.dbconfig <name>` reads one option, and `.dbconfig <name> on|off` changes
-it. The command reports an explicit error when the Python `sqlite3` module does
-not expose the connection configuration API.
-
-`.foreign_keys` reads `PRAGMA foreign_keys`; `.foreign_keys on` enables foreign
-key enforcement and `.foreign_keys off` disables it. The command prints the
-value SQLite actually applies, including when a transaction prevents a change.
-
-`.journal_mode` reads the current journal mode. `.journal_mode delete|truncate|persist|memory|wal|off` requests a mode and prints the value SQLite actually applies; some modes depend on the database type and locking environment.
-
-`.busy_timeout <milliseconds>` is an alias for `.timeout <milliseconds>` and
-sets SQLite's busy timeout on the current connection.
-
-`.encoding` reads the database text encoding. `.encoding UTF-8`, `.encoding UTF-16le`, and `.encoding UTF-16be` request an encoding through SQLite; an existing schema may keep its already established encoding.
-
-`.load <file> [entrypoint]` loads a SQLite extension for the current connection.
-PaleSQL enables extension loading only during the operation and disables it
-afterward. Relative paths in `.read` scripts resolve from the script directory.
-
-`.filectrl <operation> [arguments]` recognizes SQLite file-control operation
-names, but the standard Python `sqlite3` module does not expose
-`sqlite3_file_control()`, so PaleSQL reports that limitation explicitly.
-
-`.unmodule <name>` validates a virtual-table module name, but Python's standard
-`sqlite3` module does not expose the API needed to unregister modules. PaleSQL
-reports that limitation instead of claiming the module was removed.
-
-`.vfsinfo` is reserved for SQLite VFS information. Python's standard `sqlite3`
-module does not expose the VFS inspection API, so PaleSQL reports that
-limitation explicitly.
-
-`.vfsname` requests the active VFS name. The standard Python `sqlite3` module
-does not expose that API either, so PaleSQL reports the limitation explicitly.
-
 ## Tests
 
 ```text
-python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding test_load test_filectrl test_unmodule test_vfsinfo test_vfsname
+python -m unittest -v test_expert test_expert_cli
 ```
