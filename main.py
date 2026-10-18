@@ -88,6 +88,7 @@ def pale_help():
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
 		".eqp on|off|full - show EXPLAIN QUERY PLAN for SQL\n"
+		".explain on|off|auto - format EXPLAIN results\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -425,7 +426,7 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 		for row in rows:
 			emit(separator.join(format_value(value) for value in row))
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False, stats=False, eqp="off"):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False, stats=False, eqp="off", explain="auto"):
 	started = time.perf_counter()
 	try:
 		if eqp != "off" and re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH)\b", sql, re.IGNORECASE):
@@ -455,7 +456,12 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 			newline = "\r\n" if crlf and not sys.stdout.isatty() else "\n"
 			rows = cursor.fetchall()
 			result_count = len(rows)
-			print_results(names, rows, headers, mode, nullvalue, column_separator, row_separator, column_widths, newline)
+			formatted_mode = mode
+			formatted_headers = headers
+			if explain != "off" and re.match(r"\s*EXPLAIN\b", sql, re.IGNORECASE):
+				formatted_mode = "column"
+				formatted_headers = True
+			print_results(names, rows, formatted_headers, formatted_mode, nullvalue, column_separator, row_separator, column_widths, newline)
 		elif changes and cursor.rowcount >= 0:
 			print(f"changes: {cursor.rowcount}")
 		if timer:
@@ -863,6 +869,7 @@ def main():
 	timer = False
 	stats = False
 	eqp = "off"
+	explain = "auto"
 	column_separator = None
 	row_separator = None
 	column_widths = ()
@@ -894,7 +901,7 @@ def main():
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
 				with redirect_stdout(once_file if once_file is not None else sys.stdout):
-					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats, eqp)
+					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats, eqp, explain)
 				if not success:
 					failed = True
 					if bail and scripts:
@@ -1338,6 +1345,13 @@ def main():
 					print("Usage: .eqp on|off|full", file=sys.stderr if output_file else sys.stdout)
 					continue
 				eqp = argument.lower()
+				continue
+
+			if command == ".explain":
+				if argument.lower() not in ("on", "off", "auto"):
+					print("Usage: .explain on|off|auto", file=sys.stderr if output_file else sys.stdout)
+					continue
+				explain = argument.lower()
 				continue
 
 			if command == ".clear":
