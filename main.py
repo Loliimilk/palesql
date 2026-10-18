@@ -91,6 +91,7 @@ def pale_help():
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
 		".scanstats on|off|est - show scan metrics (estimated with Python sqlite3)\n"
+		".progress N - invoke a progress callback every N SQLite opcodes (0 disables)\n"
 		".eqp on|off|full - show EXPLAIN QUERY PLAN for SQL\n"
 		".explain on|off|auto - format EXPLAIN results\n"
 		".expert [--verbose] [--sample 0..100] - analyze the next SQL instead of executing it\n"
@@ -907,6 +908,7 @@ def main():
 	timer = False
 	stats = False
 	scanstats = "off"
+	progress_calls = 0
 	eqp = "off"
 	explain = "auto"
 	expert_options = None
@@ -933,6 +935,12 @@ def main():
 			if handle:
 				paths.append(Path(handle.name).resolve())
 		return paths
+
+	def progress_handler():
+		nonlocal progress_calls
+		progress_calls += 1
+		print(f"Progress {progress_calls}")
+		return 0
 
 	def finish_once():
 		nonlocal once_file, output_file
@@ -1412,6 +1420,18 @@ def main():
 					print("Usage: .scanstats on|off|est", file=sys.stderr if output_file else sys.stdout)
 					continue
 				scanstats = argument.lower()
+				continue
+
+			if command == ".progress":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				if re.fullmatch(r"[0-9]+", argument) is None or int(argument) > sys.maxsize:
+					print("Usage: .progress <N> (non-negative integer; 0 disables)", file=sys.stderr if output_file else sys.stdout)
+					continue
+				progress_calls = 0
+				con.set_progress_handler(progress_handler, int(argument))
 				continue
 
 			if command == ".eqp":

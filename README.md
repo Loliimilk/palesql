@@ -56,6 +56,12 @@ The advisor requires Python 3.11+ with `sqlite3.Connection.serialize()` support.
 such because CPython's standard `sqlite3` module does not expose SQLite's
 runtime `sqlite3_stmt_scanstatus()` API. `.scanstats off` disables the report.
 
+`.progress N` installs SQLite's standard progress callback every `N` virtual
+machine opcodes and prints `Progress <count>` from the callback. `.progress 0`
+removes it. The callback never interrupts SQL; it is intended for observing
+long statements. This uses `Connection.set_progress_handler()` from Python's
+standard library.
+
 ## Tests
 
 ```text
