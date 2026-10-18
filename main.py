@@ -74,6 +74,7 @@ def pale_help():
 		".clone <file> - clone the current database to a new file\n"
 		".excel - use spreadsheet-friendly CSV output with headers\n"
 		".dbtotxt - show a hex dump of the physical main database file\n"
+		".intck - run SQLite integrity_check on the current database\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
@@ -755,6 +756,17 @@ def pale_lint(cursor):
 		issues += 1
 	if not issues:
 		print("No foreign key or index issues found")
+
+
+def pale_integrity_check(cursor):
+	"""Run SQLite's full on-disk consistency check for the main database."""
+	try:
+		cursor.execute("PRAGMA integrity_check")
+		results = cursor.fetchall()
+	except sqlite3.Error as error:
+		raise ValueError(f"integrity check failed: {error}") from error
+	for result in results:
+		print(result[0] if result else "")
 
 
 def pale_fullschema(cursor):
@@ -1498,6 +1510,17 @@ def main():
 
 			if command == ".lint":
 				pale_lint(cursor)
+				continue
+
+			if command == ".intck":
+				if argument:
+					print("Usage: .intck", file=sys.stderr if output_file else sys.stdout)
+					continue
+				try:
+					pale_integrity_check(cursor)
+				except (OSError, ValueError, sqlite3.Error) as error:
+					print(f"Integrity check error: {error}", file=sys.stderr)
+					failed = True
 				continue
 
 			if command == ".columns":
