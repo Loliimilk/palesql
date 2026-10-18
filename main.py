@@ -445,6 +445,7 @@ def pale_help():
 		".cd <directory> - change PaleSQL working directory\n"
 		".shell <command> - execute a command through the system shell\n"
 		".system <command> - alias for .shell (potentially dangerous)\n"
+		".safe on|off - block shell, extension, and file operations\n"
 		".connection new|list|use N|close N - manage independent SQLite connections\n"
 		".connections - list independent SQLite connections\n"
 		".close - close current database\n"
@@ -1862,6 +1863,7 @@ def main():
 	row_separator = None
 	column_widths = ()
 	crlf = False
+	safe_mode = False
 	main_prompt = "PaleSQL: "
 	continue_prompt = "    ...: "
 	failed = False
@@ -2028,6 +2030,19 @@ def main():
 			argument = parts[1] if len(parts) == 2 else ""
 			command = command.lower()
 			argument = argument.strip()
+
+			if command == ".safe":
+				if argument.lower() not in ("on", "off"):
+					print("Usage: .safe on|off", file=sys.stderr if output_file else sys.stdout)
+					continue
+				safe_mode = argument.lower() == "on"
+				print(f"Safe mode {'on' if safe_mode else 'off'}")
+				continue
+
+			if safe_mode and command in (".shell", ".system", ".load", ".output", ".once", ".archive", ".backup", ".restore", ".save", ".clone", ".import", ".filectrl", ".unmodule"):
+				print(f"Safe mode: {command} is disabled", file=sys.stderr)
+				failed = True
+				continue
 
 			if command in (".output", ".once"):
 				try:
