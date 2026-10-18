@@ -95,6 +95,7 @@ def pale_help():
 		".parameter init|set|unset|list|clear - manage SQL parameter bindings\n"
 		".limit [name] [value] - view or change SQLite runtime limits\n"
 		".dbconfig [name] [on|off] - view or change SQLite connection options\n"
+		".foreign_keys [on|off] - view or change PRAGMA foreign_keys\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
 		".scanstats on|off|est - show scan metrics (estimated with Python sqlite3)\n"
@@ -169,6 +170,17 @@ def pale_dbconfig(connection, argument=""):
 	except (AttributeError, sqlite3.Error) as error:
 		raise ValueError(f"{name}: {error}") from error
 	print(f"{name:>28}: {int(bool(value))}")
+
+
+def pale_foreign_keys(cursor, argument=""):
+	argument = argument.strip().lower()
+	if argument not in ("", "on", "off"):
+		raise ValueError("Usage: .foreign_keys on|off")
+	if argument:
+		cursor.execute(f"PRAGMA foreign_keys = {argument}")
+	cursor.execute("PRAGMA foreign_keys")
+	value = cursor.fetchone()[0]
+	print(f"foreign_keys: {'on' if value else 'off'}")
 
 
 def get_databases(cursor):
@@ -1506,6 +1518,18 @@ def main():
 					pale_dbconfig(con, argument)
 				except (ValueError, OSError, sqlite3.Error) as error:
 					print(f"DB config error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".foreign_keys":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					pale_foreign_keys(cursor, argument)
+				except (ValueError, sqlite3.Error) as error:
+					print(f"Foreign keys error: {error}", file=sys.stderr)
 					failed = True
 				continue
 

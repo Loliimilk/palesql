@@ -77,8 +77,12 @@ build. `.dbconfig <name>` reads one option, and `.dbconfig <name> on|off` change
 it. The command reports an explicit error when the Python `sqlite3` module does
 not expose the connection configuration API.
 
+`.foreign_keys` reads `PRAGMA foreign_keys`; `.foreign_keys on` enables foreign
+key enforcement and `.foreign_keys off` disables it. The command prints the
+value SQLite actually applies, including when a transaction prevents a change.
+
 ## Tests
 
 ```text
-python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig
+python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys
 ```
