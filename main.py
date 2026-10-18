@@ -14,6 +14,7 @@ import hashlib
 import itertools
 import tempfile
 import fnmatch
+import subprocess
 from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
@@ -442,6 +443,7 @@ def pale_help():
 		".prompt <main> <continue> - set prompts; quote text containing spaces\n"
 		".open <database> - open or create database\n"
 		".cd <directory> - change PaleSQL working directory\n"
+		".shell <command> - execute a command through the system shell\n"
 		".connection new|list|use N|close N - manage independent SQLite connections\n"
 		".connections - list independent SQLite connections\n"
 		".close - close current database\n"
@@ -1303,6 +1305,20 @@ def pale_recover(connection):
 		print(sql.rstrip().rstrip(";") + ";")
 	print("COMMIT;")
 	return not incomplete
+
+
+def pale_shell(argument):
+	if not argument.strip():
+		raise ValueError("Usage: .shell <command>")
+	result = subprocess.run(argument, shell=True, capture_output=True, text=True, errors="replace")
+	if result.stdout:
+		write_result(result.stdout)
+	if result.stderr:
+		print(result.stderr, end="", file=sys.stderr)
+	if result.returncode:
+		print(f"Shell command exited with status {result.returncode}", file=sys.stderr)
+		return False
+	return True
 
 
 def parse_archive_arguments(argument):
@@ -2682,6 +2698,15 @@ def main():
 					print(path)
 				except (OSError, ValueError) as error:
 					print(f"CD error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".shell":
+				try:
+					if not pale_shell(argument):
+						failed = True
+				except (OSError, ValueError) as error:
+					print(f"Shell error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
