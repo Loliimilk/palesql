@@ -442,6 +442,7 @@ def pale_help():
 		".prompt <main> <continue> - set prompts; quote text containing spaces\n"
 		".open <database> - open or create database\n"
 		".connection new|list|use N|close N - manage independent SQLite connections\n"
+		".connections - list independent SQLite connections\n"
 		".close - close current database\n"
 		".database - show current main database\n"
 		".databases - show all attached databases\n"
@@ -2667,6 +2668,13 @@ def main():
 
 			if command in (".exit", ".quit") or inp.lower() in ("exit", "quit"):
 				break
+
+			if command == ".connections":
+				if argument:
+					print("Usage: .connections", file=sys.stderr if output_file else sys.stdout)
+					continue
+				argument = "list"
+				command = ".connection"
 
 			if command == ".connection":
 				try:
