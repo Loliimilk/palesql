@@ -444,6 +444,7 @@ def pale_help():
 		".open <database> - open or create database\n"
 		".cd <directory> - change PaleSQL working directory\n"
 		".shell <command> - execute a command through the system shell\n"
+		".system <command> - alias for .shell (potentially dangerous)\n"
 		".connection new|list|use N|close N - manage independent SQLite connections\n"
 		".connections - list independent SQLite connections\n"
 		".close - close current database\n"
@@ -2701,7 +2702,7 @@ def main():
 					failed = True
 				continue
 
-			if command == ".shell":
+			if command in (".shell", ".system"):
 				try:
 					if not pale_shell(argument):
 						failed = True
