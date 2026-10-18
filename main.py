@@ -13,6 +13,7 @@ import csv
 import hashlib
 import itertools
 import tempfile
+import fnmatch
 from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
@@ -458,6 +459,7 @@ def pale_help():
 		".restore [database] <file> - restore a database from a backup file\n"
 		".save <file> - save the current database to a file\n"
 		".clone <file> - clone the current database to a new file\n"
+		".archive [options] [files] - manage a SQLite Archive (sqlar)\n"
 		".excel - use spreadsheet-friendly CSV output with headers\n"
 		".dbtotxt - show a hex dump of the physical main database file\n"
 		".sha3sum [pattern] - show a deterministic SHA3-256 hash of database content\n"
@@ -1300,6 +1302,135 @@ def pale_recover(connection):
 	return not incomplete
 
 
+def parse_archive_arguments(argument):
+	lexer = shlex.shlex(argument, posix=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	values = list(lexer)
+	action = None
+	archive = "archive.sqlar"
+	root = Path.cwd()
+	pattern = None
+	verbose = False
+	dryrun = False
+	files = []
+	index = 0
+	actions = {"-c": "create", "--create": "create", "-u": "update", "--update": "update", "-i": "insert", "--insert": "insert", "-r": "remove", "--remove": "remove", "-t": "list", "--list": "list", "-x": "extract", "--extract": "extract"}
+	while index < len(values):
+		value = values[index]
+		if value in actions:
+			if action is not None:
+				raise ValueError("choose one archive action: -c, -u, -i, -r, -t, or -x")
+			action = actions[value]
+		elif value in ("-f", "--file"):
+			index += 1
+			if index >= len(values) or not values[index]:
+				raise ValueError("Usage: .archive [options] [files]")
+			archive = values[index]
+		elif value in ("-C", "--directory"):
+			index += 1
+			if index >= len(values) or not values[index]:
+				raise ValueError("Usage: .archive [options] [files]")
+			root = Path(values[index]).expanduser().resolve()
+		elif value in ("--glob",):
+			index += 1
+			if index >= len(values) or not values[index]:
+				raise ValueError("Usage: .archive [options] [files]")
+			pattern = values[index]
+		elif value in ("-v", "--verbose"):
+			verbose = True
+		elif value in ("-n", "--dryrun"):
+			dryrun = True
+		elif value.startswith("-"):
+			raise ValueError(f"unknown archive option: {value}")
+		else:
+			files.append(value)
+		index += 1
+	if action is None:
+		action = "list"
+	return action, Path(archive).expanduser().resolve(), root, pattern, verbose, dryrun, files
+
+
+def pale_archive(argument):
+	action, archive, root, pattern, verbose, dryrun, files = parse_archive_arguments(argument)
+	if action in ("create", "update", "insert") and not files:
+		raise ValueError("archive action requires at least one file")
+	if action in ("list", "remove", "extract") and files and pattern:
+		raise ValueError("use either archive names or --glob, not both")
+	if action == "extract" and not root.is_dir():
+		if dryrun:
+			print(f"Would create directory: {root}")
+		else:
+			root.mkdir(parents=True, exist_ok=True)
+	if not archive.exists() and action in ("list", "remove", "extract", "update", "insert"):
+		raise ValueError(f"archive not found: {archive}")
+	if dryrun and action in ("create", "update", "insert") and not archive.exists():
+		print(f"Would create archive: {archive}")
+		return
+	db = sqlite3.connect(str(archive))
+	try:
+		db.execute("CREATE TABLE IF NOT EXISTS sqlar(name TEXT PRIMARY KEY, mode INT, mtime INT, sz INT, data BLOB)")
+		if action == "create":
+			if not dryrun:
+				db.execute("DELETE FROM sqlar")
+			else:
+				print(f"Would clear archive: {archive}")
+		if action in ("create", "update", "insert"):
+			for source_name in files:
+				path = (root / source_name).resolve() if not Path(source_name).is_absolute() else Path(source_name).resolve()
+				if path == archive or (path.exists() and archive.exists() and path == archive.resolve()):
+					raise ValueError("archive cannot contain itself")
+				if not path.exists():
+					raise OSError(f"archive source not found: {path}")
+				paths = [path] if path.is_file() else [item for item in path.rglob("*") if item.is_file()]
+				for item in paths:
+					name = item.relative_to(root).as_posix() if item.is_relative_to(root) else item.name
+					stat = item.stat()
+					if dryrun:
+						print(f"Would add: {name}")
+						continue
+					data = item.read_bytes()
+					db.execute("INSERT OR REPLACE INTO sqlar(name, mode, mtime, sz, data) VALUES (?, ?, ?, ?, ?)", (name, stat.st_mode, int(stat.st_mtime), len(data), data))
+					if verbose:
+						print(f"Added: {name} ({len(data)} bytes)")
+		elif action == "list":
+				rows = db.execute("SELECT name, mode, mtime, sz FROM sqlar ORDER BY name").fetchall()
+				for name, mode, mtime, size in rows:
+					if pattern and not fnmatch.fnmatchcase(name, pattern):
+						continue
+					print(f"{name}\t{size}")
+		elif action == "remove":
+				names = files or [row[0] for row in db.execute("SELECT name FROM sqlar") if pattern and fnmatch.fnmatchcase(row[0], pattern)]
+				for name in names:
+					if dryrun:
+						print(f"Would remove: {name}")
+					else:
+						db.execute("DELETE FROM sqlar WHERE name = ?", (name,))
+		elif action == "extract":
+				rows = db.execute("SELECT name, mode, mtime, sz, data FROM sqlar ORDER BY name").fetchall()
+				for name, mode, mtime, size, data in rows:
+					if files and name not in files or pattern and not fnmatch.fnmatchcase(name, pattern):
+						continue
+					destination = (root / Path(name)).resolve()
+					if destination != root and root not in destination.parents:
+						raise ValueError(f"unsafe archive path: {name}")
+					if dryrun:
+						print(f"Would extract: {name}")
+						continue
+					destination.parent.mkdir(parents=True, exist_ok=True)
+					destination.write_bytes(data)
+					try:
+						os.chmod(destination, mode & 0o777)
+					except OSError:
+						pass
+					if verbose:
+						print(f"Extracted: {name}")
+		if not dryrun:
+			db.commit()
+	finally:
+		db.close()
+
+
 def parse_backup_arguments(argument, command=".backup"):
 	lexer = shlex.shlex(argument, posix=True)
 	lexer.whitespace_split = True
@@ -2038,6 +2169,14 @@ def main():
 					backup_database(con, cursor, "main", filename, protected_backup_paths(False))
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Clone error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".archive":
+				try:
+					pale_archive(argument)
+				except (OSError, ValueError, sqlite3.Error) as error:
+					print(f"Archive error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
