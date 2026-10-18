@@ -12,6 +12,7 @@ import shlex
 import csv
 from pathlib import Path
 from contextlib import redirect_stdout
+from expert import analyze_expert, parse_expert_arguments
 
 
 PALESQL_VERSION = "0.5.0"
@@ -89,7 +90,8 @@ def pale_help():
 		".stats on|off - show SQL execution statistics\n"
 		".eqp on|off|full - show EXPLAIN QUERY PLAN for SQL\n"
 		".explain on|off|auto - format EXPLAIN results\n"
-		".expert <SQL> - analyze a query and suggest useful indexes\n"
+		".expert [--verbose] [--sample 0..100] - analyze the next SQL instead of executing it\n"
+		".expert <SQL> - analyze SQL directly using the Python index advisor\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -504,79 +506,6 @@ def limit_name(name):
 		raise ValueError("unknown SQLite limit: " + name)
 	return name
 
-def expert_identifier(value):
-	value = value.strip()
-	if value[:1] in ('"', "`", "[") and value[-1:] in ('"', "`", "]"):
-		return value[1:-1].replace(value[0] * 2, value[0])
-	return value
-
-def expert_suggestions(cursor, sql):
-	try:
-		cursor.execute("EXPLAIN QUERY PLAN " + sql)
-		plan = cursor.fetchall()
-	except sqlite3.Error as error:
-		raise ValueError(f"cannot analyze query: {error}") from error
-
-	tables = {}
-	reserved = {"where", "join", "on", "order", "group", "having", "limit", "left", "right", "inner", "outer", "cross", "union"}
-	pattern = r"\b(?:FROM|JOIN)\s+([\w\"`\[\].]+)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?"
-	for match in re.finditer(pattern, sql, re.IGNORECASE):
-		parts = match.group(1).split(".")
-		database_hint = expert_identifier(parts[-2]) if len(parts) > 1 else None
-		table_name = expert_identifier(parts[-1])
-		alias = match.group(2)
-		if alias and alias.lower() in reserved:
-			alias = None
-		found = next((row for row in database_objects(cursor, "table") if not row[2].startswith("sqlite_") and identifier_key(row[2]) == identifier_key(table_name) and (database_hint is None or identifier_key(row[0]) == identifier_key(database_hint))), None)
-		if found and found[0] != "temp":
-			database, _, actual_name, _, _ = found
-			tables[actual_name.lower()] = {"database": database, "name": actual_name, "aliases": {actual_name.lower(), (alias or actual_name).lower()}, "columns": set()}
-			if alias:
-				tables[actual_name.lower()]["aliases"].add(alias.lower())
-	if not tables:
-		return plan, []
-
-	for section in re.finditer(r"(?:(?:WHERE|ON)\s+)(.*?)(?=\b(?:WHERE|ON|ORDER\s+BY|GROUP\s+BY|HAVING|LIMIT|UNION)\b|$)", sql, re.IGNORECASE | re.DOTALL):
-		text = section.group(1)
-		for match in re.finditer(r"(?:(\w+)\.)?(\w+)\s*(?:=|<>|!=|<=|>=|<|>|\bIN\b|\bLIKE\b|\bIS\b)", text, re.IGNORECASE):
-			alias, column = match.group(1), match.group(2)
-			for table in tables.values():
-				if (alias or "").lower() in table["aliases"] or (not alias and len(tables) == 1):
-					table["columns"].add(column)
-		for match in re.finditer(r"(?:(\w+)\.)?(\w+)\s*(?:=|<>|!=|<=|>=|<|>)\s*(?:(\w+)\.)?(\w+)", text, re.IGNORECASE):
-			for alias, column in ((match.group(1), match.group(2)), (match.group(3), match.group(4))):
-				for table in tables.values():
-					if (alias or "").lower() in table["aliases"]:
-						table["columns"].add(column)
-
-	for section in re.finditer(r"\b(?:ORDER\s+BY|GROUP\s+BY)\s+([^;]+?)(?=\b(?:LIMIT|HAVING|WHERE|UNION)\b|$)", sql, re.IGNORECASE | re.DOTALL):
-		for item in section.group(1).split(","):
-			match = re.match(r"\s*(?:(\w+)\.)?(\w+)", item)
-			if not match:
-				continue
-			alias, column = match.group(1), match.group(2)
-			for table in tables.values():
-				if (alias or "").lower() in table["aliases"] or (not alias and len(tables) == 1):
-					table["columns"].add(column)
-
-	suggestions = []
-	for table in tables.values():
-		valid_columns = {identifier_key(row[1]): row[1] for row in table_pragma(cursor, table["database"], "table_info", table["name"])}
-		columns = [valid_columns[identifier_key(column)] for column in sorted(table["columns"]) if identifier_key(column) in valid_columns]
-		if not columns:
-			continue
-		existing = []
-		for database, kind, index_name, indexed_table, index_sql in database_objects(cursor, "index"):
-			if database == table["database"] and identifier_key(indexed_table) == identifier_key(table["name"]):
-				info = table_pragma(cursor, database, "index_info", index_name)
-				indexed_columns = tuple(row[2] for row in info if row[2] is not None)
-				if indexed_columns:
-					existing.append(indexed_columns)
-		if any(tuple(identifier_key(column) for column in index[:len(columns)]) == tuple(identifier_key(column) for column in columns) for index in existing):
-			continue
-		index_name = "idx_expert_" + re.sub(r"[^A-Za-z0-9_]+", "_", table["name"] + "_" + "_".join(columns)).strip("_")
-		suggestions.append((index_name, table["database"], table["name"], columns))
-	return plan, suggestions
 
 def parse_import_arguments(argument):
 	lexer = shlex.shlex(argument, posix=True)
@@ -945,6 +874,7 @@ def main():
 	stats = False
 	eqp = "off"
 	explain = "auto"
+	expert_options = None
 	column_separator = None
 	row_separator = None
 	column_widths = ()
@@ -969,8 +899,39 @@ def main():
 				paths.append(Path(handle.name).resolve())
 		return paths
 
+	def finish_once():
+		nonlocal once_file, output_file
+		if once_file:
+			once_file.close()
+			once_file = None
+			if output_file:
+				output_file.close()
+				output_file = None
+			sys.stdout = console
+
+	def run_expert(statement, options):
+		nonlocal failed
+		try:
+			report = analyze_expert(con, statement, sample=options[0], verbose=options[1])
+			with redirect_stdout(once_file if once_file is not None else sys.stdout):
+				print(report, end="" if report.endswith("\n") else "\n")
+		except (OSError, ValueError, sqlite3.Error) as error:
+			context = f"{source_context[0]}:{source_context[1]}: " if source_context else ""
+			print(f"Expert error: {context}{error}", file=sys.stderr)
+			failed = True
+			if bail and scripts:
+				scripts.clear()
+		finally:
+			finish_once()
+
 	def run_sql(buffer):
-		nonlocal failed, once_file, output_file
+		nonlocal failed, expert_options
+		if expert_options is not None:
+			if not sqlite3.complete_statement(buffer):
+				return buffer if sql_context(buffer)[1] or sql_context(buffer)[0] == "/*" else ""
+			options, expert_options = expert_options, None
+			run_expert(buffer, options)
+			return ""
 		start = 0
 		for index, char in enumerate(buffer):
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
@@ -983,12 +944,7 @@ def main():
 						scripts.clear()
 						return ""
 				if once_file and (not success or cursor.description is not None):
-					once_file.close()
-					once_file = None
-					if output_file:
-						output_file.close()
-						output_file = None
-					sys.stdout = console
+					finish_once()
 				start = index + 1
 		remaining = buffer[start:]
 		return remaining if sql_context(remaining)[1] or sql_context(remaining)[0] == "/*" else ""
@@ -1013,6 +969,7 @@ def main():
 						if sql_context(sql)[1] or sql_context(sql)[0] == "/*":
 							print(f"SQL error: {path}:{last_line}: incomplete statement", file=sys.stderr)
 							failed = True
+							expert_options = None
 						sql = ""
 						continue
 				else:
@@ -1430,43 +1387,26 @@ def main():
 				continue
 
 			if command == ".expert":
-				if con is None:
-					print("No database opened", file=sys.stderr if output_file else sys.stdout)
-					failed = True
-					continue
-				if not argument:
-					print("Usage: .expert <SQL>", file=sys.stderr if output_file else sys.stdout)
-					continue
+				expert_options = None
 				try:
-					sql_text = argument
-					if argument[:1] in ("'", '"'):
-						lexer = shlex.shlex(argument, posix=True)
-						lexer.whitespace_split = True
-						lexer.commenters = ""
-						lexer.escape = ""
-						values = list(lexer)
-						if len(values) != 1:
-							raise ValueError("Usage: .expert <SQL>")
-						sql_text = values[0]
-					plan, suggestions = expert_suggestions(cursor, sql_text)
-					print("Query plan:")
-					for row in plan:
-						print(row[3])
-					if suggestions:
-						print("Suggested indexes:")
-						for index_name, database_name, table_name, columns in suggestions:
-							column_sql = ", ".join(quote_name(column) for column in columns)
-							table_sql = quote_name(table_name) if database_name == "main" else f"{quote_name(database_name)}.{quote_name(table_name)}"
-							print(f"CREATE INDEX IF NOT EXISTS {quote_name(index_name)} ON {table_sql} ({column_sql});")
+					if con is None:
+						raise ValueError("No database opened")
+					if sql_context(sql)[1]:
+						raise ValueError("Finish the pending SQL or use .clear before .expert")
+					sample, verbose, inline_sql = parse_expert_arguments(argument)
+					if inline_sql is None:
+						expert_options = (sample, verbose)
 					else:
-						print("No useful indexes suggested")
+						run_expert(inline_sql, (sample, verbose))
 				except (OSError, ValueError, sqlite3.Error) as error:
-					print(f"Expert error: {error}", file=sys.stderr)
+					context = f"{source_context[0]}:{source_context[1]}: " if source_context else ""
+					print(f"Expert error: {context}{error}", file=sys.stderr)
 					failed = True
 				continue
 
 			if command == ".clear":
 				sql = ""
+				expert_options = None
 				print("Buffer is cleaned")
 				continue
 
@@ -1480,6 +1420,7 @@ def main():
 
 				if con is not None:
 					con.close()
+				expert_options = None
 
 				try:
 					con, cursor = pale_open(argument)
@@ -1577,6 +1518,7 @@ def main():
 
 			if command == ".close":
 				con.close()
+				expert_options = None
 				con = None
 				cursor = None
 				sql = ""
