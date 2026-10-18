@@ -2,6 +2,7 @@ import json
 import io
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -107,6 +108,18 @@ class CommandLineIntegrationTests(unittest.TestCase):
             )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("readonly", (result.stdout + result.stderr).lower())
+
+    def test_init_script_finishes_before_the_startup_query_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "startup.sql"
+            script.write_text(
+                "CREATE TABLE startup_rows(value TEXT);\n"
+                "INSERT INTO startup_rows VALUES ('ready');\n",
+                encoding="utf-8",
+            )
+            result = run_package("--init", script, ":memory:", "SELECT value FROM startup_rows;")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "ready")
 
 
 if __name__ == "__main__":

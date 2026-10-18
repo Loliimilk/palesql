@@ -3,7 +3,7 @@ from typing import Any
 
 
 @dataclass
-class CLIState:
+class PaleState:
     connection: Any = None
     cursor: Any = None
     connections: list = field(default_factory=list)
@@ -45,6 +45,7 @@ class CLIState:
     exit_requested: bool = False
     scripts: list = field(default_factory=list)
     source_context: tuple | None = None
+    command_name: str | None = None
     console: Any = None
     output_file: Any = None
     once_file: Any = None
@@ -52,3 +53,6 @@ class CLIState:
     def clear_sql(self):
         self.sql_buffer = ""
         self.expert_options = None
+
+
+CLIState = PaleState

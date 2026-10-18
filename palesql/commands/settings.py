@@ -176,7 +176,7 @@ def handle_connection_setting(command, argument, state):
                 raise ValueError
             state.connection.execute(f"PRAGMA busy_timeout = {milliseconds}")
         except ValueError:
-            print(f"Usage: {command} <milliseconds> (non-negative integer)", file=error_target)
+            print(f"Usage: {state.command_name or command} <milliseconds> (non-negative integer)", file=error_target)
         except sqlite3.Error as error:
             print(f"Timeout error: {error}", file=sys.stderr)
             state.failed = True
