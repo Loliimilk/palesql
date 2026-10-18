@@ -441,6 +441,7 @@ def pale_help():
 		".print <text> - print literal text (no argument prints a blank line)\n"
 		".prompt <main> <continue> - set prompts; quote text containing spaces\n"
 		".open <database> - open or create database\n"
+		".connection new|list|use N|close N - manage independent SQLite connections\n"
 		".close - close current database\n"
 		".database - show current main database\n"
 		".databases - show all attached databases\n"
@@ -1818,6 +1819,8 @@ def main():
 	sql = ""
 	con = None
 	cursor = None
+	connections = []
+	active_connection = None
 	headers = False
 	mode = "list"
 	nullvalue = ""
@@ -2665,6 +2668,60 @@ def main():
 			if command in (".exit", ".quit") or inp.lower() in ("exit", "quit"):
 				break
 
+			if command == ".connection":
+				try:
+					values = shlex.split(argument)
+					action = values[0].lower() if values else "list"
+					if action == "list" and len(values) == 1:
+						if not connections:
+							print("No connections")
+						else:
+							for number, (item_con, item_cursor) in enumerate(connections, 1):
+								row = item_cursor.execute("PRAGMA database_list").fetchone()
+								filename = row[2] if row else ""
+								marker = " *" if number - 1 == active_connection else ""
+								print(f"{number}{marker}\t{filename or ':memory:'}")
+						continue
+					if action == "new" and len(values) == 1:
+						new_con = sqlite3.connect(":memory:", isolation_level=None)
+						new_cursor = new_con.cursor()
+						connections.append((new_con, new_cursor))
+						con, cursor = new_con, new_cursor
+						active_connection = len(connections) - 1
+						print(f"Connection {active_connection + 1} opened")
+						continue
+					if action == "use" and len(values) == 2 and values[1].isdigit():
+						number = int(values[1])
+						if not 1 <= number <= len(connections):
+							raise ValueError("connection number out of range")
+						clear_trace()
+						active_connection = number - 1
+						con, cursor = connections[active_connection]
+						print(f"Using connection {number}")
+						continue
+					if action == "close" and len(values) == 2 and values[1].isdigit():
+						number = int(values[1])
+						if not 1 <= number <= len(connections):
+							raise ValueError("connection number out of range")
+						index = number - 1
+						item_con, item_cursor = connections.pop(index)
+						item_cursor.close()
+						item_con.close()
+						if not connections:
+							con, cursor, active_connection = None, None, None
+						elif active_connection == index:
+							active_connection = min(index, len(connections) - 1)
+							con, cursor = connections[active_connection]
+						elif active_connection > index:
+							active_connection -= 1
+						print(f"Connection {number} closed")
+						continue
+					raise ValueError("Usage: .connection new|list|use N|close N")
+				except (OSError, ValueError, sqlite3.Error) as error:
+					print(f"Connection error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
 			if command == ".open":
 				if not argument:
 					print("No name of database", file=sys.stderr if output_file else sys.stdout)
@@ -2673,10 +2730,15 @@ def main():
 				if con is not None:
 					clear_trace()
 					con.close()
+					if active_connection is not None:
+						connections.pop(active_connection)
+						active_connection = None
 				expert_options = None
 
 				try:
 					con, cursor = pale_open(argument)
+					connections.append((con, cursor))
+					active_connection = len(connections) - 1
 
 				except sqlite3.Error as error:
 					print("Database error:", error, file=sys.stderr if output_file else sys.stdout)
@@ -2798,9 +2860,14 @@ def main():
 			if command == ".close":
 				clear_trace()
 				con.close()
+				if active_connection is not None:
+					connections.pop(active_connection)
 				expert_options = None
-				con = None
-				cursor = None
+				if connections:
+					active_connection = min(active_connection, len(connections) - 1)
+					con, cursor = connections[active_connection]
+				else:
+					con, cursor, active_connection = None, None, None
 				sql = ""
 
 				if interactive:
@@ -2835,8 +2902,12 @@ def main():
 			once_file.close()
 		if output_file:
 			output_file.close()
-		if con is not None:
-			con.close()
+		closed = set()
+		for item_con, item_cursor in connections:
+			if id(item_con) not in closed:
+				item_cursor.close()
+				item_con.close()
+				closed.add(id(item_con))
 	return 1 if failed else 0
 
 
