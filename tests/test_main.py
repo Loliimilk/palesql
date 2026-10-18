@@ -218,7 +218,6 @@ class StructureTests(unittest.TestCase):
 		before = self.con.serialize()
 		commands = [".tables", ".schema user%", ".columns users", ".indexes", ".foreignkeys orders", ".views", ".triggers", ".fullschema", ".dbinfo", ".lint"]
 		stream = io.StringIO()
-		# main closes its connection; use a wrapper to inspect state afterwards.
 		with patch("builtins.input", side_effect=commands + [".open demo"] + commands + [".help", ".exit"]), patch("main.pale_open", return_value=(type("Connection", (), {"close": lambda self: None})(), self.con.cursor())), contextlib.redirect_stdout(stream):
 			main.main()
 		self.assertEqual(before, self.con.serialize())

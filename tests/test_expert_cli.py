@@ -1,9 +1,3 @@
-"""CLI integration contracts for the expert backend.
-
-The backend is mocked here so these tests exercise the shell independently of
-index recommendation details. Engine behavior is covered by backend tests.
-"""
-
 import contextlib
 import io
 import sqlite3

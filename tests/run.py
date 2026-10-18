@@ -1,10 +1,3 @@
-"""Verbose test runner for the published PaleSQL test suite.
-
-Run from the repository root with ``python -m tests`` or
-``python tests/run.py``.  The runner intentionally uses only unittest from
-the Python standard library.
-"""
-
 import argparse
 import sys
 import unittest

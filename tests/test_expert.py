@@ -1,5 +1,3 @@
-"""Independent behavior tests for the Python index advisor."""
-
 import contextlib
 import re
 import sqlite3
@@ -12,7 +10,6 @@ from main import analyze_expert, parse_expert_arguments
 
 
 def recommended_indexes(report):
-	"""Extract executable index definitions without depending on generated names."""
 	statements = []
 	pending = ""
 	for line in report.splitlines():
@@ -271,11 +268,11 @@ class ExpertBackendTests(unittest.TestCase):
 			analyze_expert(self.con, "SELECT load_extension('nonexistent')")
 
 	def test_candidate_and_time_limits_are_explicit(self):
-		with patch("main.MAX_CANDIDATES", 1):
+		with patch("palesql.sql.MAX_CANDIDATES", 1):
 			report = analyze_expert(self.con, "SELECT * FROM users WHERE city='city-2';")
 		self.assertIn("Candidate search limited", report)
 		before = self.con.serialize()
-		with patch("main.MAX_SECONDS", 0), self.assertRaisesRegex(ValueError, "budget"):
+		with patch("palesql.sql.MAX_SECONDS", 0), self.assertRaisesRegex(ValueError, "budget"):
 			analyze_expert(self.con, "SELECT * FROM users WHERE city='city-2';")
 		self.assertEqual(self.con.serialize(), before)
 

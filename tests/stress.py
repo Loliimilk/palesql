@@ -1,10 +1,3 @@
-"""Standalone PaleSQL stress test.
-
-This script is separate from the regular unittest suite. It creates a
-temporary database, fills it with configurable data, executes representative
-CLI queries in every output mode, and runs an integrity check.
-"""
-
 import argparse
 import json
 import sqlite3
@@ -16,14 +9,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = ROOT / "main.py"
 MODES = ("list", "column", "table", "box", "csv", "tabs", "json", "jsonpretty", "line", "markdown", "quote")
 
 
 def run_cli(database, sql, commands=()):
     options = [item for command in commands for item in ("--cmd", command)]
     return subprocess.run(
-        [sys.executable, str(MAIN), "--batch", *options, str(database), sql],
+        [sys.executable, "-m", "palesql", "--batch", *options, str(database), sql],
         cwd=ROOT,
         capture_output=True,
         text=True,

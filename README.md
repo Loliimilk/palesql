@@ -21,16 +21,23 @@ PaleSQL supports:
 
 Python 3.11 or newer with the `sqlite3` module is required.
 
-PaleSQL and its tests use only the Python standard library. No packages need to be installed through `pip`. The dependency policy is recorded in `requirements.txt`.
+PaleSQL and its tests use only the Python standard library at runtime. No third party runtime packages are required. The dependency policy is recorded in `requirements.txt`.
 
 ## Running PaleSQL
 
 ```text
-python main.py
-python main.py database.db
-python main.py database.db "SELECT * FROM users;"
-python main.py --readonly database.db
-python main.py --json database.db "SELECT * FROM users;"
+python -m palesql
+python -m palesql database.db
+python -m palesql database.db "SELECT * FROM users;"
+python -m palesql --readonly database.db
+python -m palesql --json database.db "SELECT * FROM users;"
+```
+
+`python main.py` remains available for existing scripts. To install a `palesql` command in the active Python environment:
+
+```text
+pip install .
+palesql database.db
 ```
 
 ## Tests
@@ -51,7 +58,7 @@ The test database is created in a temporary directory. Persistent databases and 
 
 ## Stress test
 
-The stress test runs separately and is not included in the regular 129 tests:
+The stress test runs separately and is not included in the regular automated suite:
 
 ```text
 python tests/stress.py
@@ -68,6 +75,10 @@ python tests/stress.py --rows 50000 --database stress.db
 
 ## Structure
 
-* `main.py` contains the current PaleSQL implementation.
+* `palesql/` is the application package. `cli.py` owns the command loop, `state.py` owns session state, `database.py`, `sql.py`, and `output.py` own their respective layers.
+* `palesql/commands/` groups core, schema, files, settings, diagnostics, connections, and system commands.
+* `palesql/__main__.py` enables `python -m palesql`.
+* `main.py` is a small compatibility launcher for existing scripts.
 * `tests/` contains unit tests, integration tests, fixtures, and the separate stress test.
-* `requirements.txt` documents that there are no external dependencies.
+* `pyproject.toml` defines the installable package and `palesql` console command.
+* `requirements.txt` documents that there are no external runtime dependencies.
