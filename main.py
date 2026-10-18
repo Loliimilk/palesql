@@ -461,8 +461,9 @@ def pale_help():
 		".excel - use spreadsheet-friendly CSV output with headers\n"
 		".dbtotxt - show a hex dump of the physical main database file\n"
 		".sha3sum [pattern] - show a deterministic SHA3-256 hash of database content\n"
-		".integrity - run SQLite integrity_check on the current database\n"
+	".integrity - run SQLite integrity_check on the current database\n"
 		".intck - short alias for .integrity\n"
+		".selftest - run a consistency self-test of the current database\n"
 		".lint - check foreign keys and suggest indexes\n"
 		".nullvalue <text> - set NULL text; JSON and quote keep native NULL values\n"
 		".separator <column> [row] - set list/csv/tabs separators; supports quotes and \\t, \\n, \\r\n"
@@ -1519,6 +1520,49 @@ def pale_integrity_check(cursor):
 		print(result[0] if result else "")
 
 
+def pale_selftest(connection):
+	"""Run a compact, read-only health check over the current database."""
+	issues = []
+	cursor = connection.cursor()
+	try:
+		try:
+			cursor.execute("PRAGMA quick_check")
+			quick = [row[0] for row in cursor.fetchall()]
+			if quick != ["ok"]:
+				issues.extend(f"quick_check: {result}" for result in quick)
+		except sqlite3.Error as error:
+			issues.append(f"quick_check: {error}")
+
+		try:
+			cursor.execute("PRAGMA foreign_key_check")
+			foreign_issues = cursor.fetchall()
+			issues.extend(f"foreign key violation: {row}" for row in foreign_issues)
+		except sqlite3.Error as error:
+			issues.append(f"foreign_key_check: {error}")
+
+		try:
+			cursor.execute("SELECT type, name, sql FROM main.sqlite_schema WHERE sql IS NOT NULL ORDER BY name")
+			objects = cursor.fetchall()
+			tables = [name for kind, name, sql in objects if kind == "table" and not name.startswith("sqlite_")]
+			for table in tables:
+				cursor.execute(f"SELECT count(*) FROM main.{quote_name(table)}")
+				cursor.fetchone()
+				cursor.execute(f"PRAGMA main.table_xinfo({quote_name(table)})")
+				cursor.fetchall()
+		except sqlite3.Error as error:
+			issues.append(f"schema/data read: {error}")
+	finally:
+		cursor.close()
+
+	if issues:
+		print("Self-test: FAILED")
+		for issue in issues:
+			print(f"  {issue}")
+		return False
+	print("Self-test: OK")
+	return True
+
+
 def pale_fullschema(cursor):
 	for seq, database, file in get_databases(cursor):
 		if database not in ("main", "temp"):
@@ -2560,6 +2604,18 @@ def main():
 					pale_integrity_check(cursor)
 				except (OSError, ValueError, sqlite3.Error) as error:
 					print(f"Integrity check error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".selftest":
+				if argument:
+					print("Usage: .selftest", file=sys.stderr if output_file else sys.stdout)
+					continue
+				try:
+					if not pale_selftest(con):
+						failed = True
+				except (OSError, ValueError, sqlite3.Error) as error:
+					print(f"Self-test error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
