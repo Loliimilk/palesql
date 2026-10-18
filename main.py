@@ -87,6 +87,7 @@ def pale_help():
 		".limit [name] [value] - view or change SQLite runtime limits\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
+		".eqp on|off|full - show EXPLAIN QUERY PLAN for SQL\n"
 		".width <n1> <n2> ... - column/table widths; 0 = auto, omitted columns = auto\n"
 		"Widths wrap long values and may shrink to fit the terminal.\n"
 		".mode <mode> - set output format (default: list)\n"
@@ -424,9 +425,25 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 		for row in rows:
 			emit(separator.join(format_value(value) for value in row))
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False, stats=False):
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False, stats=False, eqp="off"):
 	started = time.perf_counter()
 	try:
+		if eqp != "off" and re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH)\b", sql, re.IGNORECASE):
+			bound = parameters if parameters else None
+			try:
+				cursor.execute("EXPLAIN QUERY PLAN " + sql, bound) if bound else cursor.execute("EXPLAIN QUERY PLAN " + sql)
+				plan_rows = cursor.fetchall()
+				print("QUERY PLAN")
+				for row in plan_rows:
+					print(row[3])
+				if eqp == "full":
+					cursor.execute("EXPLAIN " + sql, bound) if bound else cursor.execute("EXPLAIN " + sql)
+					bytecode = cursor.fetchall()
+					print("BYTECODE")
+					for row in bytecode:
+						print("|".join("" if value is None else str(value) for value in row))
+			except sqlite3.Error:
+				pass
 		if parameters:
 			cursor.execute(sql, parameters)
 		else:
@@ -845,6 +862,7 @@ def main():
 	parameters = {}
 	timer = False
 	stats = False
+	eqp = "off"
 	column_separator = None
 	row_separator = None
 	column_widths = ()
@@ -876,7 +894,7 @@ def main():
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
 				with redirect_stdout(once_file if once_file is not None else sys.stdout):
-					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats)
+					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats, eqp)
 				if not success:
 					failed = True
 					if bail and scripts:
@@ -1313,6 +1331,13 @@ def main():
 					print("Usage: .stats on|off", file=sys.stderr if output_file else sys.stdout)
 					continue
 				stats = argument.lower() == "on"
+				continue
+
+			if command == ".eqp":
+				if argument.lower() not in ("on", "off", "full"):
+					print("Usage: .eqp on|off|full", file=sys.stderr if output_file else sys.stdout)
+					continue
+				eqp = argument.lower()
 				continue
 
 			if command == ".clear":
