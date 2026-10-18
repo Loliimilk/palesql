@@ -448,6 +448,7 @@ def pale_help():
 		".system <command> - alias for .shell (potentially dangerous)\n"
 		".safe on|off - block shell, extension, and file operations\n"
 		".auth on|off - show SQLite authorizer callbacks\n"
+		".nonce <string> - allow one blocked command in safe mode\n"
 		".connection new|list|use N|close N - manage independent SQLite connections\n"
 		".connections - list independent SQLite connections\n"
 		".close - close current database\n"
@@ -1866,6 +1867,7 @@ def main():
 	column_widths = ()
 	crlf = False
 	safe_mode = False
+	safe_nonce = None
 	auth_enabled = False
 	main_prompt = "PaleSQL: "
 	continue_prompt = "    ...: "
@@ -2052,10 +2054,20 @@ def main():
 				print(f"Safe mode {'on' if safe_mode else 'off'}")
 				continue
 
-			if safe_mode and command in (".shell", ".system", ".load", ".output", ".once", ".archive", ".backup", ".restore", ".save", ".clone", ".import", ".filectrl", ".unmodule"):
-				print(f"Safe mode: {command} is disabled", file=sys.stderr)
-				failed = True
+			if command == ".nonce":
+				if not argument:
+					print("Usage: .nonce <string>", file=sys.stderr if output_file else sys.stdout)
+					continue
+				safe_nonce = argument
+				print("Nonce armed for the next safe-mode command")
 				continue
+
+			if safe_mode and command in (".shell", ".system", ".load", ".output", ".once", ".archive", ".backup", ".restore", ".save", ".clone", ".import", ".filectrl", ".unmodule"):
+				if safe_nonce is None:
+					print(f"Safe mode: {command} is disabled", file=sys.stderr)
+					failed = True
+					continue
+				safe_nonce = None
 
 			if command in (".output", ".once"):
 				try:
