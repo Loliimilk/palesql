@@ -90,6 +90,7 @@ def pale_help():
 		".limit [name] [value] - view or change SQLite runtime limits\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
+		".scanstats on|off|est - show scan metrics (estimated with Python sqlite3)\n"
 		".eqp on|off|full - show EXPLAIN QUERY PLAN for SQL\n"
 		".explain on|off|auto - format EXPLAIN results\n"
 		".expert [--verbose] [--sample 0..100] - analyze the next SQL instead of executing it\n"
@@ -431,7 +432,26 @@ def print_results(names, rows, headers, mode, nullvalue="", column_separator=Non
 		for row in rows:
 			emit(separator.join(format_value(value) for value in row))
 
-def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False, stats=False, eqp="off", explain="auto"):
+def print_scanstats(cursor, sql, mode, parameters=None):
+	if mode == "off" or not re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH)\b", sql, re.IGNORECASE):
+		return
+	try:
+		if parameters:
+			cursor.execute("EXPLAIN QUERY PLAN " + sql, parameters)
+		else:
+			cursor.execute("EXPLAIN QUERY PLAN " + sql)
+		rows = cursor.fetchall()
+		scans = sum("SCAN " in row[3].upper() for row in rows)
+		searches = sum("SEARCH " in row[3].upper() for row in rows)
+		temporary = sum("TEMP B-TREE" in row[3].upper() for row in rows)
+		prefix = "Scanstats (estimated)" if mode == "est" else "Scanstats (estimated fallback)"
+		suffix = "" if mode == "est" else "; runtime sqlite3_stmt_scanstatus is unavailable in Python sqlite3"
+		print(f"{prefix}: loops={len(rows)} scans={scans} searches={searches} temp_btrees={temporary}{suffix}")
+	except sqlite3.Error as error:
+		print(f"Scanstats unavailable: {error}")
+
+
+def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_separator=None, row_separator=None, column_widths=(), crlf=False, changes=False, error_context=None, parameters=None, timer=False, stats=False, eqp="off", explain="auto", scanstats="off"):
 	started = time.perf_counter()
 	try:
 		if eqp != "off" and re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH)\b", sql, re.IGNORECASE):
@@ -474,6 +494,7 @@ def execute_sql(cursor, sql, headers=False, mode="list", nullvalue="", column_se
 		if stats:
 			changed_count = cursor.rowcount if cursor.rowcount >= 0 else 0
 			print(f"Stats: rows={result_count} changes={changed_count} total_changes={cursor.connection.total_changes}")
+		print_scanstats(cursor, sql, scanstats, parameters)
 		return True
 
 	except sqlite3.Error as error:
@@ -885,6 +906,7 @@ def main():
 	parameters = {}
 	timer = False
 	stats = False
+	scanstats = "off"
 	eqp = "off"
 	explain = "auto"
 	expert_options = None
@@ -950,7 +972,7 @@ def main():
 			if char == ";" and sqlite3.complete_statement(buffer[start:index + 1]):
 				statement = buffer[start:index + 1]
 				with redirect_stdout(once_file if once_file is not None else sys.stdout):
-					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats, eqp, explain)
+					success = execute_sql(cursor, statement, headers, mode, nullvalue, column_separator, row_separator, column_widths, crlf, changes, source_context, parameters, timer, stats, eqp, explain, scanstats)
 				if not success:
 					failed = True
 					if bail and scripts:
@@ -1383,6 +1405,13 @@ def main():
 					print("Usage: .stats on|off", file=sys.stderr if output_file else sys.stdout)
 					continue
 				stats = argument.lower() == "on"
+				continue
+
+			if command == ".scanstats":
+				if argument.lower() not in ("on", "off", "est"):
+					print("Usage: .scanstats on|off|est", file=sys.stderr if output_file else sys.stdout)
+					continue
+				scanstats = argument.lower()
 				continue
 
 			if command == ".eqp":

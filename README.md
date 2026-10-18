@@ -51,6 +51,11 @@ temporary disk space and memory; large databases may exceed the analysis budget.
 
 The advisor requires Python 3.11+ with `sqlite3.Connection.serialize()` support.
 
+`.scanstats est` reports estimated scan/search/temp-sort counts from
+`EXPLAIN QUERY PLAN`. `.scanstats on` uses the same fallback and labels it as
+such because CPython's standard `sqlite3` module does not expose SQLite's
+runtime `sqlite3_stmt_scanstatus()` API. `.scanstats off` disables the report.
+
 ## Tests
 
 ```text
