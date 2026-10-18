@@ -441,6 +441,7 @@ def pale_help():
 		".print <text> - print literal text (no argument prints a blank line)\n"
 		".prompt <main> <continue> - set prompts; quote text containing spaces\n"
 		".open <database> - open or create database\n"
+		".cd <directory> - change PaleSQL working directory\n"
 		".connection new|list|use N|close N - manage independent SQLite connections\n"
 		".connections - list independent SQLite connections\n"
 		".close - close current database\n"
@@ -2668,6 +2669,21 @@ def main():
 
 			if command in (".exit", ".quit") or inp.lower() in ("exit", "quit"):
 				break
+
+			if command == ".cd":
+				try:
+					values = shlex.split(argument) if argument[:1] in ("'", '"') else ([argument] if argument else [])
+					if len(values) != 1:
+						raise ValueError("Usage: .cd <directory>")
+					path = Path(values[0]).expanduser().resolve()
+					if not path.is_dir():
+						raise ValueError(f"directory not found: {path}")
+					os.chdir(path)
+					print(path)
+				except (OSError, ValueError) as error:
+					print(f"CD error: {error}", file=sys.stderr)
+					failed = True
+				continue
 
 			if command == ".connections":
 				if argument:
