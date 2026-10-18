@@ -86,8 +86,10 @@ value SQLite actually applies, including when a transaction prevents a change.
 `.busy_timeout <milliseconds>` is an alias for `.timeout <milliseconds>` and
 sets SQLite's busy timeout on the current connection.
 
+`.encoding` reads the database text encoding. `.encoding UTF-8`, `.encoding UTF-16le`, and `.encoding UTF-16be` request an encoding through SQLite; an existing schema may keep its already established encoding.
+
 ## Tests
 
 ```text
-python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode
+python -m unittest -v test_main test_expert test_expert_cli test_intck test_scanstats test_progress test_trace test_log test_dbconfig test_foreign_keys test_journal_mode test_encoding
 ```

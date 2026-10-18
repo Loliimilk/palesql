@@ -98,6 +98,7 @@ def pale_help():
 		".dbconfig [name] [on|off] - view or change SQLite connection options\n"
 		".foreign_keys [on|off] - view or change PRAGMA foreign_keys\n"
 		".journal_mode [mode] - view or change PRAGMA journal_mode\n"
+		".encoding [UTF-8|UTF-16le|UTF-16be] - view or change database encoding\n"
 		".timer on|off - show SQL execution time\n"
 		".stats on|off - show SQL execution statistics\n"
 		".scanstats on|off|est - show scan metrics (estimated with Python sqlite3)\n"
@@ -198,6 +199,27 @@ def pale_journal_mode(cursor, argument=""):
 	if not row or row[0] is None:
 		raise sqlite3.DatabaseError("SQLite did not return a journal mode")
 	print(f"journal_mode: {str(row[0]).lower()}")
+
+
+def pale_encoding(cursor, argument=""):
+	argument = argument.strip().lower()
+	encodings = {
+		"utf-8": "UTF-8",
+		"utf8": "UTF-8",
+		"utf-16le": "UTF-16le",
+		"utf16le": "UTF-16le",
+		"utf-16be": "UTF-16be",
+		"utf16be": "UTF-16be",
+	}
+	if argument and argument not in encodings:
+		raise ValueError("Usage: .encoding [UTF-8|UTF-16le|UTF-16be]")
+	if argument:
+		cursor.execute(f"PRAGMA encoding = '{encodings[argument]}'")
+	cursor.execute("PRAGMA encoding")
+	row = cursor.fetchone()
+	if not row or row[0] is None:
+		raise sqlite3.DatabaseError("SQLite did not return an encoding")
+	print(f"encoding: {row[0]}")
 
 
 def get_databases(cursor):
@@ -1559,6 +1581,18 @@ def main():
 					pale_journal_mode(cursor, argument)
 				except (ValueError, sqlite3.Error) as error:
 					print(f"Journal mode error: {error}", file=sys.stderr)
+					failed = True
+				continue
+
+			if command == ".encoding":
+				if con is None:
+					print("No database opened", file=sys.stderr if output_file else sys.stdout)
+					failed = True
+					continue
+				try:
+					pale_encoding(cursor, argument)
+				except (ValueError, sqlite3.Error) as error:
+					print(f"Encoding error: {error}", file=sys.stderr)
 					failed = True
 				continue
 
