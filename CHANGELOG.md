@@ -2,6 +2,13 @@
 
 All notable PaleSQL changes are listed here. Versions before 0.16.0 are summarized from the feature roadmap.
 
+## 0.18.0
+
+- Added hardening coverage for corrupt databases, large queries and imports, long SQL, many tables and connections, BLOBs, Unicode, invalid UTF-8, interrupted scripts, output failures, rollbacks, and SQLite limits.
+- Streamed CSV imports in bounded batches while preserving all-or-nothing transactions.
+- Added GitHub Actions coverage for Windows and Ubuntu on Python 3.11, 3.12, and 3.13.
+- Restored Python 3.11 compatibility and made dbconfig tests account for the unavailable standard-library API on that version.
+
 ## 0.17.0rc1
 
 - Added `PaleState`, an explicit command dispatcher, command aliases, and command metadata.
