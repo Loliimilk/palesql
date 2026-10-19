@@ -1,2 +1,0 @@
-# PaleSQL uses only the Python standard library.
-# No third party packages are required for the CLI or the test suite.

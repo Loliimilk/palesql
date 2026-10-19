@@ -2,6 +2,13 @@
 
 All notable PaleSQL changes are listed here. Versions before 0.16.0 are summarized from the feature roadmap.
 
+## 0.19.0
+
+- Added installed-package smoke checks to the Windows and Ubuntu CI matrix for Python 3.11, 3.12, and 3.13.
+- Verified wheel and source-distribution builds, including clean wheel installation on Windows and Linux.
+- Removed the redundant `requirements.txt`; PaleSQL has no third-party runtime dependencies and uses `pyproject.toml` for installation.
+- Updated package license metadata for current setuptools builds.
+
 ## 0.18.0
 
 - Added hardening coverage for corrupt databases, large queries and imports, long SQL, many tables and connections, BLOBs, Unicode, invalid UTF-8, interrupted scripts, output failures, rollbacks, and SQLite limits.
