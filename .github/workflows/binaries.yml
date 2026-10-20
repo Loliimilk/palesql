@@ -1,0 +1,63 @@
+name: Build binaries
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64 2019
+            runner: windows-2019
+            binary: palesql-windows-x64-2019
+            extension: .exe
+            options: --icon "$GITHUB_WORKSPACE/icons/PaleSQL.ico"
+          - label: Windows x64 2022
+            runner: windows-2022
+            binary: palesql-windows-x64-2022
+            extension: .exe
+            options: --icon "$GITHUB_WORKSPACE/icons/PaleSQL.ico"
+          - label: macOS Intel
+            runner: macos-13
+            binary: palesql-macos-x86_64
+            extension: ""
+            options: ""
+          - label: macOS Apple Silicon
+            runner: macos-14
+            binary: palesql-macos-arm64
+            extension: ""
+            options: ""
+          - label: Linux x64
+            runner: ubuntu-22.04
+            binary: palesql-linux-x86_64
+            extension: ""
+            options: ""
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install builder
+        run: python -m pip install pyinstaller
+      - name: Build executable
+        shell: bash
+        run: >
+          python -m PyInstaller --noconfirm --clean --onefile
+          --name "${{ matrix.binary }}" ${{ matrix.options }} main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: dist/${{ matrix.binary }}${{ matrix.extension }}
+          if-no-files-found: error
+          retention-days: 30
