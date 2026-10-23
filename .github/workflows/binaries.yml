@@ -17,9 +17,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: Windows x64 2019
-            runner: windows-2019
-            binary: palesql-windows-x64-2019
+          - label: Windows x64 2025
+            runner: windows-2025
+            binary: palesql-windows-x64-2025
             extension: .exe
             options: --icon "$GITHUB_WORKSPACE/icons/PaleSQL.ico"
           - label: Windows x64 2022
@@ -27,13 +27,13 @@ jobs:
             binary: palesql-windows-x64-2022
             extension: .exe
             options: --icon "$GITHUB_WORKSPACE/icons/PaleSQL.ico"
-          - label: macOS Intel
-            runner: macos-13
+          - label: macOS 15 Intel
+            runner: macos-15-intel
             binary: palesql-macos-x86_64
             extension: ""
             options: ""
-          - label: macOS Apple Silicon
-            runner: macos-14
+          - label: macOS 15 Apple Silicon
+            runner: macos-15
             binary: palesql-macos-arm64
             extension: ""
             options: ""

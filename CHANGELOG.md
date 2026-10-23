@@ -2,6 +2,13 @@
 
 All notable PaleSQL changes are listed here. Versions before 0.16.0 are summarized from the feature roadmap.
 
+## 1.0.0
+
+- Stabilized the modular CLI package, shared application state, and command dispatcher.
+- Published the automated test suite and CI coverage for Windows and Ubuntu on Python 3.11, 3.12, and 3.13.
+- Verified installation from a built wheel, source distribution, and the `palesql` command entry point.
+- Updated executable builds to supported Windows and macOS runners, alongside Linux x64.
+
 ## 0.19.0
 
 - Added installed-package smoke checks to the Windows and Ubuntu CI matrix for Python 3.11, 3.12, and 3.13.
