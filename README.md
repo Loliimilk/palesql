@@ -4,7 +4,30 @@ PaleSQL is a lightweight SQLite command line client written in Python. It runs r
 
 ## Requirements
 
-PaleSQL requires Python 3.11 or newer with the standard `sqlite3` module. It has no third party runtime dependencies.
+Running PaleSQL from source requires Python 3.11 or newer with the standard `sqlite3` module. It has no third party runtime dependencies.
+
+## Prebuilt binaries
+
+Download the archive for your platform from the [PaleSQL v1.0.0 release](https://github.com/Loliimilk/palesql/releases/tag/v1.0.0), extract it, and run the executable. These links point to v1.0.0 directly. Python does not need to be installed.
+
+Available builds:
+
+- Windows x64: [palesql-windows-x64.zip](https://github.com/Loliimilk/palesql/releases/download/v1.0.0/palesql-windows-x64.zip)
+- macOS Intel: [palesql-macos-x86_64.zip](https://github.com/Loliimilk/palesql/releases/download/v1.0.0/palesql-macos-x86_64.zip)
+- macOS Apple Silicon: [palesql-macos-arm64.zip](https://github.com/Loliimilk/palesql/releases/download/v1.0.0/palesql-macos-arm64.zip)
+- Linux x86_64: [palesql-linux-x86_64.zip](https://github.com/Loliimilk/palesql/releases/download/v1.0.0/palesql-linux-x86_64.zip)
+
+For example, on Windows:
+
+```powershell
+.\palesql-windows-x64.exe database.db
+```
+
+Windows may show a SmartScreen warning because the executable is new and unsigned. This indicates that the file or publisher has not built a reputation; it does not by itself mean the file is malicious. You can compare the archive's SHA-256 hash with the digest displayed on the GitHub release page:
+
+```powershell
+Get-FileHash .\palesql-windows-x64.zip -Algorithm SHA256
+```
 
 ## Installation
 
