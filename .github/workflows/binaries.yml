@@ -50,6 +50,12 @@ jobs:
           python-version: "3.13"
       - name: Install builder
         run: python -m pip install pyinstaller
+      - name: Prepare Windows icon
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m pip install Pillow
+          python -c "from PIL import Image; Image.open('icons/PaleBoy.png').save('icons/PaleSQL.ico', format='ICO', sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])"
       - name: Build executable
         shell: bash
         run: >

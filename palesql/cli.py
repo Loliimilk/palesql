@@ -1,7 +1,6 @@
 import sys
 import argparse
 import sqlite3
-import os
 import re
 import io
 import json
@@ -53,54 +52,8 @@ def print_cli_help(parser):
 	pale_help()
 
 
-def cli_input(prompt, history):
-	if os.name != "nt" or not sys.stdin.isatty():
-		return input(prompt)
-	try:
-		import msvcrt
-	except ImportError:
-		return input(prompt)
-	sys.stdout.write(prompt)
-	sys.stdout.flush()
-	buffer = []
-	history_index = len(history)
-	draft = ""
-	while True:
-		key = msvcrt.getwch()
-		if key in ("\r", "\n"):
-			sys.stdout.write("\n")
-			return "".join(buffer)
-		if key == "\003":
-			raise KeyboardInterrupt
-		if key == "\004":
-			if not buffer:
-				raise EOFError
-			continue
-		if key in ("\b", "\x7f"):
-			if buffer:
-				buffer.pop()
-				sys.stdout.write("\b \b")
-				sys.stdout.flush()
-			continue
-		if key in ("\x00", "\xe0"):
-			code = ord(msvcrt.getwch())
-			if code in (72, 80):
-				if code == 72:
-					if history_index == len(history):
-						draft = "".join(buffer)
-					history_index = max(0, history_index - 1)
-				else:
-					history_index = min(len(history), history_index + 1)
-				value = draft if history_index == len(history) else history[history_index]
-				for _ in buffer:
-					sys.stdout.write("\b \b")
-				buffer = list(value)
-				sys.stdout.write(value)
-				sys.stdout.flush()
-			continue
-		buffer.append(key)
-		sys.stdout.write(key)
-		sys.stdout.flush()
+def cli_input(prompt):
+	return input(prompt)
 
 
 from .output import (
@@ -497,7 +450,7 @@ class PaleCLI:
 			return None
 		with redirect_stdout(state.console):
 			prompt = (state.continue_prompt if state.sql_buffer else state.main_prompt) if self.interactive else ""
-			return cli_input(prompt, state.history) if self.interactive else input(prompt)
+			return cli_input(prompt) if self.interactive else input(prompt)
 
 	def handle_unknown_or_sql(self, raw_input, command, argument):
 		state = self.state
